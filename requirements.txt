@@ -1,0 +1,10 @@
+opencv-contrib-python
+numpy
+rembg
+Pillow
+svgwrite
+mediapipe
+torch
+torchvision
+scipy
+google-genai
