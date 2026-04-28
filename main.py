@@ -22,17 +22,21 @@ class SketchApp:
     def __init__(self):
         print(">> 심플 G-코드 변환기 (AI 스케치 통합 버전) 시작")
         os.makedirs(config.GENERAL_INPUT_DIR, exist_ok=True)
+        os.makedirs(config.CHARACTERS_DIR, exist_ok=True)
         config.initialize_session()
         self.photo_counter = 1
         self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.gemini_prompt = None
+        self.character_image = None
         
         # 프롬프트 설정 파일 경로
         self.prompts_file = os.path.join(config.BASE_DIR, "config", "gemini_prompts.json")
+        self.char_prompts_file = os.path.join(config.BASE_DIR, "config", "gemini_character_prompts.json")
         self.prompts_dict = self.load_prompts()
+        self.char_prompts_dict = self.load_character_prompts()
 
     def load_prompts(self):
-        """JSON 파일에서 프롬프트 목록을 로드합니다. 파일이 없으면 생성합니다."""
+        """JSON 파일에서 일반 프롬프트 목록을 로드합니다."""
         default_prompts = {
             "1. 세선화 최적화 (기본)": "A high-quality, pure black line art caricature based on the provided image. The entire drawing is rendered exclusively with lines of exactly the same thickness (uniform line weight, minimal width) using only solid black ink. DO NOT FILL ANY AREAS with solid color. Draw everything, including eyes and pupils, as hollow outlines only. Ensure there are no solid black regions or shading. The lines are precise and appear machine-drawn for direct path tracing.",
             "2. 정밀한 얼굴 캐리커처": "A highly detailed black ink line art focusing on facial features and expressions. Pure black lines on a clean white background. Strictly NO SOLID FILLS. Eyes and pupils must be rendered as clean, hollow circular outlines with no solid color inside. The drawing must consist entirely of empty closed loops and paths for precise portrait plotting.",
@@ -40,25 +44,39 @@ class SketchApp:
             "4. 굵은 코믹스 외곽선": "Bold and strong black outlines, comic book style line art. Use only outlines to define shapes. Do not use solid fills for shadows, hair, or features. Eyes and pupils must be rendered as hollow line drawings with no solid fill. No solid black regions. High contrast but composed entirely of empty paths."
         }
         
-        if not os.path.exists(self.prompts_file):
+        return self._load_json_prompts(self.prompts_file, default_prompts)
+
+    def load_character_prompts(self):
+        """JSON 파일에서 캐릭터 동반 전용 프롬프트 목록을 로드합니다."""
+        default_char_prompts = {
+            "1. 어깨 위의 파트너": "A pure black line art caricature of the person from the first image with the character from the second image sitting naturally on their shoulder. They are in the same scene, interacting. Draw the entire scene exclusively with lines of exactly the same thickness (uniform line weight) using solid black ink. No solid fills, shading, or gradients. Hollow eyes. Machine-drawn style for plotting.",
+            "2. 나란히 서 있는 친구": "A pure black line art caricature of the person from the first image standing side-by-side with the character from the second image as friends. Draw them interacting naturally. Draw the entire scene exclusively with lines of exactly the same thickness (uniform line weight) using solid black ink. No solid fills, shading, or gradients. Hollow eyes.",
+            "3. 머리 위의 요정": "A pure black line art caricature of the person from the first image with the small character from the second image sitting or floating above their head like a fairy. Draw the entire scene exclusively with lines of exactly the same thickness (uniform line weight) using solid black ink. No solid fills, shading, or gradients.",
+            "4. 함께 손을 흔드는 모습": "A pure black line art caricature of the person from the first image and the character from the second image standing together and waving their hands at the viewer. Both are in the same line art style, rendered exclusively with lines of exactly the same thickness using solid black ink."
+        }
+        
+        return self._load_json_prompts(self.char_prompts_file, default_char_prompts)
+
+    def _load_json_prompts(self, file_path, default_data):
+        if not os.path.exists(file_path):
             try:
-                os.makedirs(os.path.dirname(self.prompts_file), exist_ok=True)
-                with open(self.prompts_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_prompts, f, indent=4, ensure_ascii=False)
-                print(f"[설정] 기본 프롬프트 파일이 생성되었습니다: {self.prompts_file}")
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(default_data, f, indent=4, ensure_ascii=False)
+                print(f"[설정] 기본 프롬프트 파일이 생성되었습니다: {file_path}")
             except Exception as e:
                 print(f"[경고] 프롬프트 파일 생성 실패: {e}")
-            return default_prompts
+            return default_data
             
         try:
-            with open(self.prompts_file, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return data if data else default_prompts
+                return data if data else default_data
         except Exception as e:
             print(f"[경고] 프롬프트 파일을 읽는 중 오류 발생: {e}")
-            return default_prompts
+            return default_data
 
-    def check_gemini_config(self):
+    def check_gemini_config(self, is_character_mode=False):
         """Gemini 사용 전 API 키와 프롬프트를 확인 및 설정합니다."""
         if not self.gemini_api_key:
             print("\n[설정] Gemini API 키가 환경변수에 없습니다.")
@@ -67,39 +85,86 @@ class SketchApp:
                 print("[경고] API 키가 없어 Gemini 기능을 사용할 수 없습니다.")
                 return False
         
-        self.prompts_dict = self.load_prompts()
-        prompt_keys = list(self.prompts_dict.keys())
+        # 모드에 따른 프롬프트 딕셔너리 선택
+        current_prompts = self.char_prompts_dict if is_character_mode else self.prompts_dict
+        prompt_keys = list(current_prompts.keys())
+        mode_name = "캐릭터 동반" if is_character_mode else "Gemini 스타일"
 
         print("\n" + "-"*40)
-        print(" [Gemini 스타일 선택]")
+        print(f" [{mode_name} 선택]")
         print("-"*40)
         print(" 0. 모든 프롬프트 순차 실행 (Batch Mode)")
         for i, key in enumerate(prompt_keys, 1):
-            print(f" {key}")
+            print(f" {i}. {key}")
         print(f" {len(prompt_keys) + 1}. 사용자 직접 입력")
         print("-"*40)
         
         try:
             p_input = input(f"선택 (0~{len(prompt_keys) + 1}, 기본값 1): ").strip()
             if p_input == '0':
-                self.gemini_prompt = self.prompts_dict # 딕셔너리 전체 전달
+                self.gemini_prompt = current_prompts # 딕셔너리 전체 전달
                 print(">> [배치 모드] 모든 프롬프트를 순서대로 실행합니다.")
             elif not p_input:
-                self.gemini_prompt = self.prompts_dict[prompt_keys[0]]
+                self.gemini_prompt = current_prompts[prompt_keys[0]]
             else:
                 p_choice = int(p_input)
                 if 1 <= p_choice <= len(prompt_keys):
                     selected_key = prompt_keys[p_choice - 1]
-                    self.gemini_prompt = self.prompts_dict[selected_key]
+                    self.gemini_prompt = current_prompts[selected_key]
                     print(f">> '{selected_key}' 스타일이 적용되었습니다.")
                 elif p_choice == len(prompt_keys) + 1:
                     self.gemini_prompt = input("프롬프트를 직접 입력하세요: ").strip()
                 else:
-                    self.gemini_prompt = self.prompts_dict[prompt_keys[0]]
+                    self.gemini_prompt = current_prompts[prompt_keys[0]]
         except (ValueError, IndexError):
-            self.gemini_prompt = self.prompts_dict[prompt_keys[0]]
+            self.gemini_prompt = current_prompts[prompt_keys[0]]
             
         return True
+
+    def select_character_image(self):
+        """합성할 캐릭터 이미지를 폴더에서 선택합니다."""
+        if not os.path.exists(config.CHARACTERS_DIR):
+            os.makedirs(config.CHARACTERS_DIR, exist_ok=True)
+            
+        files = [f for f in os.listdir(config.CHARACTERS_DIR) 
+                 if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        
+        if not files:
+            print(f"\n[안내] '{config.CHARACTERS_DIR}' 폴더에 캐릭터 이미지가 없습니다.")
+            print("합성 없이 사용자 사진만으로 진행합니다.")
+            return None
+
+        print("\n" + "-"*40)
+        print(" [동반할 캐릭터 선택]")
+        print("-"*40)
+        for i, filename in enumerate(files, 1):
+            print(f" {i}. {filename}")
+        print("-"*40)
+
+        try:
+            choice = input(f"선택 (1~{len(files)}, 기본값 1): ").strip()
+            if not choice:
+                idx = 0
+            else:
+                idx = int(choice) - 1
+            
+            if 0 <= idx < len(files):
+                selected_file = os.path.join(config.CHARACTERS_DIR, files[idx])
+                img_array = np.fromfile(selected_file, np.uint8)
+                char_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                if char_img is not None:
+                    print(f">> '{files[idx]}' 캐릭터가 선택되었습니다.")
+                    return char_img
+                else:
+                    print(f"[오류] 캐릭터 이미지를 불러올 수 없습니다: {files[idx]}")
+        except (ValueError, IndexError):
+            print("[알림] 잘못된 입력입니다. 첫 번째 캐릭터로 진행합니다.")
+            if files:
+                selected_file = os.path.join(config.CHARACTERS_DIR, files[0])
+                img_array = np.fromfile(selected_file, np.uint8)
+                return cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        
+        return None
 
     def run(self):
         while True:
@@ -114,7 +179,10 @@ class SketchApp:
                 '3': ('AI_ANIME', 'FILE'),
                 '4': ('GEMINI', 'ZED'),
                 '5': ('GEMINI', 'WEBCAM'),
-                '6': ('GEMINI', 'FILE')
+                '6': ('GEMINI', 'FILE'),
+                '7': ('GEMINI_CHAR', 'ZED'),
+                '8': ('GEMINI_CHAR', 'WEBCAM'),
+                '9': ('GEMINI_CHAR', 'FILE')
             }
             
             if choice not in mode_map:
@@ -123,8 +191,19 @@ class SketchApp:
                 
             sketch_type, input_type = mode_map[choice]
             
+            # 캐릭터 이미지 및 프롬프트 설정 초기화
+            self.character_image = None
+            self.gemini_prompt = None
+            
             if sketch_type == 'GEMINI':
-                if not self.check_gemini_config():
+                if not self.check_gemini_config(is_character_mode=False):
+                    continue
+            elif sketch_type == 'GEMINI_CHAR':
+                if not self.check_gemini_config(is_character_mode=True):
+                    continue
+                self.character_image = self.select_character_image()
+                if self.character_image is None:
+                    print("[알림] 캐릭터를 선택하지 않아 일반 모드로 전환하거나 취소합니다.")
                     continue
             
             input_data = self.get_input(input_type)
@@ -136,7 +215,6 @@ class SketchApp:
             if processed_image is None:
                 continue
 
-            # 4. AI 스케치 생성 및 G-코드 변환 (Batch Mode 대응)
             self.process_and_save(processed_image, sketch_type, base_filename, intermediate_dir, output_dir)
             
             self.photo_counter += 1
@@ -149,12 +227,18 @@ class SketchApp:
         print(" 1. Informative-Drawing AI (Anime) + ZED 카메라")
         print(" 2. Informative-Drawing AI (Anime) + 일반 웹캠")
         print(" 3. Informative-Drawing AI (Anime) + 파일 불러오기")
+        print("-" * 50)
         print(" 4. Gemini AI 고품질 스케치 + ZED 카메라")
         print(" 5. Gemini AI 고품질 스케치 + 일반 웹캠")
         print(" 6. Gemini AI 고품질 스케치 + 파일 불러오기")
+        print("-" * 50)
+        print(" 7. Gemini AI 캐릭터 동반 스케치 + ZED 카메라")
+        print(" 8. Gemini AI 캐릭터 동반 스케치 + 일반 웹캠")
+        print(" 9. Gemini AI 캐릭터 동반 스케치 + 파일 불러오기")
+        print("-" * 50)
         print(" Q. 프로그램 종료")
         print("="*50)
-        return input("선택 (1~6 또는 Q): ").strip().upper()
+        return input("선택 (1~9 또는 Q): ").strip().upper()
 
     def get_input(self, input_type):
         photo_specific_name = f"{self.photo_counter}_capture"
@@ -191,20 +275,13 @@ class SketchApp:
             shutil.copy(src_path, dest_path)
             return dest_path, os.path.splitext(filename)[0]
 
-        # 카메라 촬영 결과 처리
         if captured_path:
-            # data/raw/ 폴더에도 자동으로 복사본 저장
-            timestamp = os.path.basename(captured_path).split('_')[-1] # 기존 타임스탬프 활용 시도
-            if not timestamp.endswith('.png'):
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".png"
-            
             raw_save_path = os.path.join(config.GENERAL_INPUT_DIR, os.path.basename(captured_path))
             try:
                 shutil.copy(captured_path, raw_save_path)
                 print(f"[자동 저장] 원본 사진이 '{config.GENERAL_INPUT_DIR}'에 저장되었습니다.")
             except Exception as e:
                 print(f"[경고] data/raw 복사 실패: {e}")
-                
             return captured_path, base_name
         
         return None
@@ -234,30 +311,28 @@ class SketchApp:
         return preprocessed, intermediate_dir, output_dir
 
     def process_and_save(self, image, sketch_type, base_filename, intermediate_dir, output_dir):
-        """AI 스케치 생성 후 세선화를 거쳐 G-코드로 저장합니다. (Batch 모드 지원)"""
-        
-        # Gemini 배치 모드 처리 (딕셔너리인 경우)
-        if sketch_type == 'GEMINI' and isinstance(self.gemini_prompt, dict):
+        if (sketch_type == 'GEMINI' or sketch_type == 'GEMINI_CHAR') and isinstance(self.gemini_prompt, dict):
             print(f"\n>> [일괄 처리 시작] 총 {len(self.gemini_prompt)}개의 스타일을 적용합니다.")
             for i, (style_name, prompt_text) in enumerate(self.gemini_prompt.items(), 1):
-                # 파일명에 사용할 안전한 스타일 이름 생성
                 safe_style_name = "".join([c if c.isalnum() else "_" for c in style_name])
                 current_base = f"{base_filename}_{safe_style_name}"
-                
                 print(f"\n[{i}/{len(self.gemini_prompt)}] 스타일 적용 중: {style_name}")
                 self._single_process_and_save(image, sketch_type, prompt_text, current_base, intermediate_dir, output_dir)
         else:
-            # 단일 모드 처리
             self._single_process_and_save(image, sketch_type, self.gemini_prompt, base_filename, intermediate_dir, output_dir)
 
     def _single_process_and_save(self, image, sketch_type, prompt, base_filename, intermediate_dir, output_dir):
-        """실제 한 장의 이미지를 변환하고 저장하는 내부 메서드"""
         if sketch_type == 'AI_ANIME':
             sketch = generate_sketch(image)
             threshold_val = 220
             suffix = "anime"
-        else: # GEMINI
-            sketch = generate_gemini_sketch(image, api_key=self.gemini_api_key, prompt=prompt)
+        else: # GEMINI or GEMINI_CHAR
+            sketch = generate_gemini_sketch(
+                image, 
+                api_key=self.gemini_api_key, 
+                prompt=prompt,
+                character_image_bgr=self.character_image
+            )
             threshold_val = 240
             suffix = "gemini"
 
@@ -272,10 +347,8 @@ class SketchApp:
             sketch = cv2.cvtColor(sketch, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(sketch, threshold_val, 255, cv2.THRESH_BINARY)
         
-        print(f">> [세선화 및 G-코드 생성] {output_base}")
         nc_path = os.path.join(output_dir, f"{output_base}.nc")
         svg_path = os.path.join(output_dir, f"{output_base}.svg")
-        
         generate_files_thinning(binary, nc_path, svg_path)
         print(f">> 완료: {output_base}.nc")
 

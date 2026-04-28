@@ -6,6 +6,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 # 사용자가 이미지를 넣는 공용 폴더
 GENERAL_INPUT_DIR = os.path.join(DATA_DIR, "raw") 
+# 합성용 캐릭터 이미지가 저장되는 폴더
+CHARACTERS_DIR = os.path.join(DATA_DIR, "characters")
 
 # --- 세션 관리 ---
 # 프로그램의 단일 실행 인스턴스 동안 유지되는 최상위 세션 폴더 경로
