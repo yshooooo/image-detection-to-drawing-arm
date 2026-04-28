@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import shutil
 import json
+import datetime
 from modules import (
     config,
     image_processor,
@@ -159,19 +160,18 @@ class SketchApp:
         photo_specific_name = f"{self.photo_counter}_capture"
         input_dir, _, _ = config.setup_photo_paths(photo_specific_name)
 
+        captured_path = None
+        base_name = "photo"
+
         if input_type == 'ZED':
             print("\n>> ZED 카메라 실행 (SPACE: 촬영, ESC: 취소)")
             captured_path = run_zed_capture(save_dir=input_dir)
-            if captured_path is None:
-                return None
-            return captured_path, "zed"
+            base_name = "zed"
 
         elif input_type == 'WEBCAM':
             print("\n>> 포토부스 실행 (스페이스바: 촬영, ESC: 취소)")
             captured_path = run_photo_booth(save_dir=input_dir)
-            if captured_path is None:
-                return None
-            return captured_path, "webcam"
+            base_name = "webcam"
 
         elif input_type == 'FILE':
             files = [f for f in os.listdir(config.GENERAL_INPUT_DIR) if os.path.isfile(os.path.join(config.GENERAL_INPUT_DIR, f))]
@@ -190,6 +190,24 @@ class SketchApp:
             dest_path = os.path.join(input_dir, filename)
             shutil.copy(src_path, dest_path)
             return dest_path, os.path.splitext(filename)[0]
+
+        # 카메라 촬영 결과 처리
+        if captured_path:
+            # data/raw/ 폴더에도 자동으로 복사본 저장
+            timestamp = os.path.basename(captured_path).split('_')[-1] # 기존 타임스탬프 활용 시도
+            if not timestamp.endswith('.png'):
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".png"
+            
+            raw_save_path = os.path.join(config.GENERAL_INPUT_DIR, os.path.basename(captured_path))
+            try:
+                shutil.copy(captured_path, raw_save_path)
+                print(f"[자동 저장] 원본 사진이 '{config.GENERAL_INPUT_DIR}'에 저장되었습니다.")
+            except Exception as e:
+                print(f"[경고] data/raw 복사 실패: {e}")
+                
+            return captured_path, base_name
+        
+        return None
 
     def preprocess(self, input_path, base_filename):
         photo_specific_name = f"{self.photo_counter}_capture"

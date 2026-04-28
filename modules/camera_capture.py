@@ -1,4 +1,8 @@
-import pyzed.sl as sl
+try:
+    import pyzed.sl as sl
+    ZED_AVAILABLE = True
+except ImportError:
+    ZED_AVAILABLE = False
 import cv2
 import time
 import os
@@ -37,6 +41,10 @@ def run_zed_capture(save_dir=None):
         촬영 성공 시 -> 저장된 이미지 경로 (str)
         종료/실패 시 -> None
     """
+    if not ZED_AVAILABLE:
+        print("\n[오류] ZED SDK가 설치되어 있지 않거나 pyzed 모듈을 찾을 수 없습니다.")
+        print("일반 웹캠 모드(Photo Booth)를 사용해 주세요.")
+        return None
     
     # 저장 경로 설정
     if not save_dir:
