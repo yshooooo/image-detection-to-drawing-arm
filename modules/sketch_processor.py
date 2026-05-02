@@ -45,18 +45,25 @@ class SketchProcessor:
             progress_callback("original", image, "원본 이미지를 로드했습니다.")
         cv2.imencode(".jpg", image)[1].tofile(os.path.join(input_dir, "original.jpg"))
 
-        # 2. 전처리 (사람 및 얼굴 추출)
-        person_roi = detect_person_and_get_roi(image)
-        cropped = image[person_roi[1]:person_roi[1]+person_roi[3], person_roi[0]:person_roi[0]+person_roi[2]] if person_roi else image
+        # 2. 전처리 (얼굴 우선, 없으면 사람/상체 추출)
+        # 카메라 화면에서 보여주는 ROI와 일치시키기 위해 detect_face_and_get_roi를 우선 시도
+        roi = detect_face_and_get_roi(image)
+        roi_type = "얼굴"
         
-        if progress_callback:
-            progress_callback("cropped", cropped, "사람/객체 영역을 추출했습니다.")
+        if roi is None:
+            roi = detect_person_and_get_roi(image)
+            roi_type = "사람/상체"
 
-        face_roi = detect_face_and_get_roi(cropped)
-        if face_roi:
-            cropped = cropped[face_roi[1]:face_roi[3], face_roi[0]:face_roi[2]]
+        if roi:
+            x1, y1, x2, y2 = roi
+            # 정확한 슬라이싱: [y1:y2, x1:x2]
+            cropped = image[y1:y2, x1:x2]
             if progress_callback:
-                progress_callback("face_cropped", cropped, "얼굴 영역을 추출했습니다.")
+                progress_callback("cropped", cropped, f"{roi_type} 영역을 A4 비율로 추출했습니다.")
+        else:
+            cropped = image
+            if progress_callback:
+                progress_callback("cropped", cropped, "객체를 감지하지 못해 원본 전체를 사용합니다.")
 
         preprocessed = image_processor(cropped)
         if preprocessed is None:
@@ -89,30 +96,25 @@ class SketchProcessor:
     def _single_generate(self, image, sketch_type, prompt, character_image, base_filename, 
                          intermediate_dir, output_dir, pen_config, progress_callback, api_key):
         
-        if sketch_type == 'AI_ANIME':
-            sketch = generate_sketch(image)
-            threshold_val = 220
-            suffix = "anime"
-        else: # GEMINI or GEMINI_CHAR
-            if progress_callback:
-                progress_callback("gemini_start", None, "Gemini AI가 스케치를 생성 중입니다...")
-            
-            # API 키가 명시적으로 전달되지 않았으면 환경변수 사용
-            final_api_key = api_key if api_key else os.getenv("GEMINI_API_KEY")
-            
-            sketch = generate_gemini_sketch(
-                image, 
-                api_key=final_api_key, 
-                prompt=prompt,
-                character_image_bgr=character_image
-            )
-            threshold_val = 240
-            suffix = "gemini"
+        # GEMINI or GEMINI_CHAR
+        if progress_callback:
+            progress_callback("gemini_start", None, "Gemini AI가 스케치를 생성 중입니다...")
+        
+        # API 키가 명시적으로 전달되지 않았으면 환경변수 사용
+        final_api_key = api_key if api_key else os.getenv("GEMINI_API_KEY")
+        
+        # generate_gemini_sketch 내부에서 예외를 발생시키므로 여기서도 예외가 발생함
+        sketch = generate_gemini_sketch(
+            image, 
+            api_key=final_api_key, 
+            prompt=prompt,
+            character_image_bgr=character_image
+        )
+        threshold_val = 240
+        suffix = "gemini"
 
         if sketch is None:
-            if progress_callback:
-                progress_callback("error", None, f"'{base_filename}' 스케치 생성 실패")
-            return None
+            raise RuntimeError(f"'{base_filename}' 스케치 생성 실패: 결과가 없습니다.")
 
         if progress_callback:
             progress_callback("sketch", sketch, "스케치 생성이 완료되었습니다.")

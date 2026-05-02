@@ -3,7 +3,7 @@ import os
 import cv2
 import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QComboBox, QPushButton, 
+                             QHBoxLayout, QGridLayout, QLabel, QComboBox, QPushButton, 
                              QGroupBox, QFileDialog, QMessageBox, QScrollArea,
                              QLineEdit, QProgressBar)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
@@ -53,6 +53,7 @@ class CameraThread(QThread):
 class WorkerThread(QThread):
     progress_signal = pyqtSignal(str, np.ndarray, str)
     finished_signal = pyqtSignal(list)
+    error_signal = pyqtSignal(str) # 에러 메시지 전용 시그널 추가
 
     def __init__(self, processor, image, sketch_type, gemini_api_key=None, 
                  gemini_prompt=None, character_image=None, pen_config=None):
@@ -66,12 +67,19 @@ class WorkerThread(QThread):
         self.pen_config = pen_config
 
     def run(self):
-        results = self.processor.process(
-            self.image, self.sketch_type, self.gemini_api_key, 
-            self.gemini_prompt, self.character_image, self.pen_config,
-            progress_callback=self.emit_progress
-        )
-        self.finished_signal.emit(results if results else [])
+        try:
+            results = self.processor.process(
+                self.image, self.sketch_type, self.gemini_api_key, 
+                self.gemini_prompt, self.character_image, self.pen_config,
+                progress_callback=self.emit_progress
+            )
+            self.finished_signal.emit(results if results else [])
+        except Exception as e:
+            import traceback
+            error_msg = f"처리 중 오류가 발생했습니다:\n{str(e)}"
+            # 인코딩 오류 등 상세 정보가 필요할 경우 traceback 포함 가능
+            # error_msg += f"\n\n{traceback.format_exc()}"
+            self.error_signal.emit(error_msg)
 
     def emit_progress(self, step_id, image, message):
         # 이미지가 None인 경우 빈 배열 전달
@@ -86,7 +94,11 @@ class SketchGui(QMainWindow):
         
         self.processor = SketchProcessor()
         self.current_frame = None
+        self.captured_image = None # 초기화 명시
         self.character_image = None
+        
+        self.zoom_factor = 1.0 # 기본 줌 배율
+        self.preview_labels = [] # 스케일링할 라벨 목록 추적
         
         self.prompts_dict = config.load_prompts()
         self.char_prompts_dict = config.load_character_prompts()
@@ -116,6 +128,16 @@ class SketchGui(QMainWindow):
         self.btn_load_file = QPushButton("파일에서 불러오기")
         self.btn_load_file.clicked.connect(self.load_image_file)
         left_layout.addWidget(self.btn_load_file)
+
+        # --- 추가: 촬영/로드된 이미지를 보여줄 공간 ---
+        left_layout.addSpacing(20)
+        left_layout.addWidget(QLabel("선택된 이미지:"))
+        self.captured_label = QLabel("이미지 없음")
+        self.captured_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.captured_label.setFixedSize(400, 300)
+        self.captured_label.setStyleSheet("border: 2px solid #4CAF50; background-color: #f9f9f9;")
+        self.captured_label.setScaledContents(False)
+        left_layout.addWidget(self.captured_label)
         
         left_layout.addStretch()
         left_panel.setLayout(left_layout)
@@ -128,17 +150,20 @@ class SketchGui(QMainWindow):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.preview_container = QWidget()
-        self.preview_layout = QVBoxLayout(self.preview_container)
+        self.preview_layout = QGridLayout(self.preview_container)
+        self.preview_layout.setSpacing(10) # 사진 간 간격
+        self.preview_layout.setContentsMargins(5, 5, 5, 5) # 테두리 여백 최소화
+        self.preview_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft) # 상단 좌측 정렬 고정
         
-        self.lbl_step_original, w1 = self.create_preview_label("1. 원본 이미지")
-        self.lbl_step_cropped, w2 = self.create_preview_label("2. 객체/얼굴 추출")
-        self.lbl_step_processed, w3 = self.create_preview_label("3. 보정 및 배경 제거")
-        self.lbl_step_final, w4 = self.create_preview_label("4. 최종 스케치")
+        # 1번 원본은 왼쪽 카메라 라벨에 통합 예정이므로 여기서 제거
+        self.lbl_step_cropped, w2 = self.create_preview_label("1. 객체/얼굴 추출")
+        self.lbl_step_processed, w3 = self.create_preview_label("2. 보정 및 배경 제거")
+        self.lbl_step_final, w4 = self.create_preview_label("3. 최종 스케치")
         
-        self.preview_layout.addWidget(w1)
-        self.preview_layout.addWidget(w2)
-        self.preview_layout.addWidget(w3)
-        self.preview_layout.addWidget(w4)
+        # 중앙 패널에 3개의 과정 배치 (한 줄로 가로 배치)
+        self.preview_layout.addWidget(w2, 0, 0)
+        self.preview_layout.addWidget(w3, 0, 1)
+        self.preview_layout.addWidget(w4, 0, 2)
         
         self.scroll_area.setWidget(self.preview_container)
         center_layout.addWidget(self.scroll_area)
@@ -212,12 +237,22 @@ class SketchGui(QMainWindow):
     def create_preview_label(self, title):
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.addWidget(QLabel(title))
+        layout.setContentsMargins(0, 0, 0, 0) # 전체 여백 제거
+        layout.setSpacing(0) # 텍스트와 이미지 사이 간격 0으로 설정
+        
+        lbl_title = QLabel(title)
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # CSS를 통해 라벨 자체의 마진과 패딩을 0으로 강제
+        lbl_title.setStyleSheet("font-weight: bold; font-size: 12px; margin: 0px; padding: 0px;")
+        layout.addWidget(lbl_title)
+        
         lbl_img = QLabel("이미지 없음")
         lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_img.setFixedSize(300, 225)
-        lbl_img.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
-        lbl_img.setScaledContents(True)
+        # A4 비율(210:297 ≈ 1:1.414) 적용. 가로 300px 기준 세로 424px
+        lbl_img.setFixedSize(300, 424)
+        lbl_img.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0; margin: 0px;")
+        lbl_img.setScaledContents(False)
+        self.preview_labels.append(lbl_img) # 줌 관리를 위해 목록에 추가
         layout.addWidget(lbl_img)
         return lbl_img, container
 
@@ -247,14 +282,20 @@ class SketchGui(QMainWindow):
         bytes_per_line = ch * w
         qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
         pixmap = QPixmap.fromImage(qt_image)
-        self.camera_label.setPixmap(pixmap.scaled(self.camera_label.size(), Qt.AspectRatioMode.KeepAspectRatio))
+        self.camera_label.setPixmap(pixmap.scaled(self.camera_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
     def capture_image(self):
         if self.current_frame is not None:
             self.captured_image = self.current_frame.copy()
-            self.display_preview(self.lbl_step_original, self.captured_image)
+            # 실시간 카메라는 그대로 두고, 아래 별도 라벨(captured_label)에 촬영된 사진 표시
+            rgb_image = cv2.cvtColor(self.captured_image, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
+            self.captured_label.setPixmap(QPixmap.fromImage(qt_image).scaled(self.captured_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            
             self.status_label.setText("사진 촬영 완료. 설정을 확인 후 시작 버튼을 누르세요.")
-            # 촬영 시 다른 단계 초기화
+            # 촬영 시 중앙 단계 초기화
             self.lbl_step_cropped.setText("준비 중...")
             self.lbl_step_processed.setText("준비 중...")
             self.lbl_step_final.setText("준비 중...")
@@ -265,7 +306,13 @@ class SketchGui(QMainWindow):
             img_array = np.fromfile(file_path, np.uint8)
             self.captured_image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             if self.captured_image is not None:
-                self.display_preview(self.lbl_step_original, self.captured_image)
+                # 로드된 사진을 아래 별도 라벨(captured_label)에 표시
+                rgb_image = cv2.cvtColor(self.captured_image, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
+                self.captured_label.setPixmap(QPixmap.fromImage(qt_image).scaled(self.captured_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                
                 self.status_label.setText(f"파일 로드 완료: {os.path.basename(file_path)}")
 
     def display_preview(self, label, frame):
@@ -275,7 +322,9 @@ class SketchGui(QMainWindow):
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
         qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
-        label.setPixmap(QPixmap.fromImage(qt_image))
+        pixmap = QPixmap.fromImage(qt_image)
+        # 비율을 유지하며 라벨 크기에 맞춰 스케일링 (왜곡 방지)
+        label.setPixmap(pixmap.scaled(label.width(), label.height(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
     def start_processing(self):
         if not hasattr(self, 'captured_image'):
@@ -290,7 +339,8 @@ class SketchGui(QMainWindow):
         
         if style_text == "캐릭터 동반 모드":
             sketch_type = 'GEMINI_CHAR'
-            prompt = self.char_prompts_dict.get("1. 어깨 위의 파트너") # 기본값
+            # 기본 프롬프트 사용 (캐릭터 동반 모드 선택 시 첫 번째 프롬프트)
+            prompt = list(self.char_prompts_dict.values())[0]
             char_file = self.combo_char.currentText()
             if char_file == "캐릭터 없음":
                 self.character_image = None
@@ -299,14 +349,8 @@ class SketchGui(QMainWindow):
                 img_array = np.fromfile(char_path, np.uint8)
                 self.character_image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         else:
-            sketch_type = 'GEMINI' if "Gemini" in style_text or "세선화" in style_text else 'AI_ANIME' # 실제 로직에 따라 구분
-            # 임시로 '세선화' 등이 포함되면 GEMINI로 처리하도록 로직 보완 필요
-            if "세선화" in style_text or "캐리커처" in style_text or "미니멀" in style_text or "코믹스" in style_text:
-                sketch_type = 'GEMINI'
-                prompt = self.prompts_dict[style_text]
-            else:
-                sketch_type = 'AI_ANIME'
-                prompt = None
+            sketch_type = 'GEMINI'
+            prompt = self.prompts_dict[style_text]
             self.character_image = None
 
         # UI 상태 업데이트
@@ -323,19 +367,24 @@ class SketchGui(QMainWindow):
         )
         self.worker.progress_signal.connect(self.on_worker_progress)
         self.worker.finished_signal.connect(self.on_worker_finished)
+        self.worker.error_signal.connect(self.handle_worker_error) # 에러 시그널 연결
         self.worker.start()
 
     def on_worker_progress(self, step_id, image, message):
         self.status_label.setText(message)
         if image.size > 0:
-            if step_id == "original":
-                self.display_preview(self.lbl_step_original, image)
-            elif step_id == "cropped" or step_id == "face_cropped":
+            if step_id == "cropped" or step_id == "face_cropped":
                 self.display_preview(self.lbl_step_cropped, image)
             elif step_id == "preprocessed":
                 self.display_preview(self.lbl_step_processed, image)
             elif step_id == "sketch" or step_id == "done":
                 self.display_preview(self.lbl_step_final, image)
+
+    def handle_worker_error(self, error_msg):
+        self.btn_process.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        QMessageBox.critical(self, "처리 오류", error_msg)
+        self.status_label.setText("작업 실패.")
 
     def on_worker_finished(self, results):
         self.btn_process.setEnabled(True)
@@ -346,6 +395,48 @@ class SketchGui(QMainWindow):
         else:
             QMessageBox.critical(self, "오류", "이미지 처리 중 오류가 발생했습니다.")
             self.status_label.setText("작업 실패.")
+
+    def wheelEvent(self, event):
+        # Ctrl 키가 눌린 상태에서 휠을 돌릴 때만 줌 작동
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoom_factor *= 1.1 # 10% 확대
+            else:
+                self.zoom_factor *= 0.9 # 10% 축소
+            
+            # 줌 범위 제한 (0.5배 ~ 3.0배)
+            self.zoom_factor = max(0.5, min(self.zoom_factor, 3.0))
+            self.update_ui_scale()
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def update_ui_scale(self):
+        # 기본 사이즈 정의
+        base_w, base_h = 300, 424
+        new_w = int(base_w * self.zoom_factor)
+        new_h = int(base_h * self.zoom_factor)
+        
+        # 1. 프리뷰 라벨들 크기 조정
+        for lbl in self.preview_labels:
+            lbl.setFixedSize(new_w, new_h)
+            
+        # 2. 좌측 카메라 및 선택 이미지 라벨 크기 조정
+        cam_w = int(400 * self.zoom_factor)
+        cam_h = int(300 * self.zoom_factor)
+        self.camera_label.setFixedSize(cam_w, cam_h)
+        self.captured_label.setFixedSize(cam_w, cam_h)
+        
+        # 3. 현재 표시된 이미지들 다시 그리기 (Pixmaps refresh)
+        if hasattr(self, 'captured_image'):
+            self.display_preview(self.captured_label, self.captured_image)
+            
+        # 워커가 이미 완료한 단계가 있다면 해당 이미지들도 다시 그리기 
+        # (이미지 데이터를 객체에 저장해두지 않았으므로, 현재 화면에 있는 Pixmap을 기반으로 하거나
+        # 처리가 끝난 후라면 다시 로드하는 로직이 필요할 수 있음. 
+        # 여기서는 라벨 크기만 변경해도 display_preview가 호출되면 맞춰짐)
+        self.status_label.setText(f"화면 배율: {int(self.zoom_factor * 100)}%")
 
     def closeEvent(self, event):
         self.camera_thread.stop()

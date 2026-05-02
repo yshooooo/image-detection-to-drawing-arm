@@ -16,8 +16,7 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
         api_key = os.getenv("GEMINI_API_KEY")
     
     if not api_key:
-        print("\n[오류] GEMINI_API_KEY가 설정되지 않았습니다.")
-        return None
+        raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
 
     if not prompt:
         if character_image_bgr is not None:
@@ -111,4 +110,4 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
 
     except Exception as e:
         print(f"   [오류 발생] {e}")
-        return None
+        raise e # 에러를 다시 발생시켜 상위에서 처리하도록 함
