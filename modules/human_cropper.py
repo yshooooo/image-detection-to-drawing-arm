@@ -76,7 +76,8 @@ _frame_timestamp_ms = 0
 
 
 # ─── 상수 ────────────────────────────────────────────────────────────────────
-A5_RATIO = 148 / 210  # ≈ 0.7048 (width / height)
+A4_RATIO = 210 / 297  # ≈ 0.707 (width / height)
+A5_RATIO = A4_RATIO   # A5와 A4는 가로세로 비율이 동일함
 
 # 상체 ROI 계산에 사용할 랜드마크 인덱스
 # PoseLandmarker 랜드마크 목록: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker
@@ -98,7 +99,7 @@ def _to_mp_image(image: np.ndarray) -> mp.Image:
 def _adjust_roi_to_ratio(
     x1: int, y1: int, x2: int, y2: int,
     frame_h: int, frame_w: int,
-    ratio: float = A5_RATIO
+    ratio: float = A4_RATIO
 ) -> tuple:
     """
     ROI를 지정 비율(width/height)로 중심 유지하며 조정합니다.
@@ -112,18 +113,39 @@ def _adjust_roi_to_ratio(
     current_ratio = roi_w / roi_h if roi_h > 0 else ratio
 
     if current_ratio > ratio:
+        # 가로가 비율보다 길면 세로를 늘림
         new_w = roi_w
         new_h = int(roi_w / ratio)
     else:
+        # 세로가 비율보다 길면 가로를 늘림
         new_h = roi_h
         new_w = int(roi_h * ratio)
 
-    new_x1 = max(0,       cx - new_w // 2)
-    new_y1 = max(0,       cy - new_h // 2)
-    new_x2 = min(frame_w, new_x1 + new_w)
-    new_y2 = min(frame_h, new_y1 + new_h)
+    # 중심 유지하며 새로운 좌표 계산
+    nx1 = cx - new_w // 2
+    ny1 = cy - new_h // 2
+    nx2 = nx1 + new_w
+    ny2 = ny1 + new_h
 
-    return new_x1, new_y1, new_x2, new_y2
+    # 프레임 범위를 벗어날 경우 이동(Shift)하여 최대한 영역 확보
+    if nx1 < 0:
+        nx2 -= nx1
+        nx1 = 0
+    if ny1 < 0:
+        ny2 -= ny1
+        ny1 = 0
+    if nx2 > frame_w:
+        nx1 -= (nx2 - frame_w)
+        nx2 = frame_w
+    if ny2 > frame_h:
+        ny1 -= (ny2 - frame_h)
+        ny2 = frame_h
+
+    # 최종 클리핑 (여전히 벗어나는 경우 대비)
+    nx1, ny1 = max(0, nx1), max(0, ny1)
+    nx2, ny2 = min(frame_w, nx2), min(frame_h, ny2)
+
+    return int(nx1), int(ny1), int(nx2), int(ny2)
 
 
 # ─── 공개 함수 ────────────────────────────────────────────────────────────────
@@ -131,15 +153,7 @@ def _adjust_roi_to_ratio(
 def detect_person_and_get_roi(image: np.ndarray) -> tuple | None:
     """
     MediaPipe PoseLandmarker로 상체 ROI를 반환합니다.
-
-    [신버전 변경점]
-    - VIDEO 모드: detect_for_video(mp_image, timestamp_ms) 사용
-    - 랜드마크: result.pose_landmarks[사람인덱스][랜드마크인덱스]
-    - 좌표: .x, .y 가 0~1 정규화값 → 픽셀 변환 필요
-    - visibility: .visibility 로 접근 (구버전과 동일)
-
-    Returns:
-        (x, y, w, h) 또는 None
+    A4 비율이 적용된 (x1, y1, x2, y2)를 반환합니다.
     """
     global _frame_timestamp_ms
     _frame_timestamp_ms += 33  # 약 30fps 기준 타임스탬프 증가
@@ -164,31 +178,27 @@ def detect_person_and_get_roi(image: np.ndarray) -> tuple | None:
     if len(xs) < 2:
         return None
 
-    pad_x   = int((max(xs) - min(xs)) * 0.1)
-    pad_y   = int((max(ys) - min(ys)) * 0.1)
-    # 머리 위 여유 공간 확보: 위쪽 패딩을 아래쪽보다 크게
-    pad_top = int((max(ys) - min(ys)) * 0.5)
+    # 기본 바운딩 박스
+    x1, y1 = min(xs), min(ys)
+    x2, y2 = max(xs), max(ys)
 
-    rx = max(0, min(xs) - pad_x)
-    ry = max(0, min(ys) - pad_top)   # 위로 더 올림
-    rw = min(w, max(xs) + pad_x) - rx
-    rh = min(h, max(ys) + pad_y) - ry
+    # 여유 공간 추가
+    pad_w = int((x2 - x1) * 0.2)
+    pad_top = int((y2 - y1) * 0.6)
+    pad_bottom = int((y2 - y1) * 0.2)
 
-    return (rx, ry, rw, rh)
+    nx1 = max(0, x1 - pad_w)
+    ny1 = max(0, y1 - pad_top)
+    nx2 = min(w, x2 + pad_w)
+    ny2 = min(h, y2 + pad_bottom)
+
+    # A4 비율 조정
+    return _adjust_roi_to_ratio(nx1, ny1, nx2, ny2, h, w)
 
 
 def detect_face_and_get_roi(image: np.ndarray) -> tuple | None:
     """
-    MediaPipe FaceDetector로 얼굴을 감지하고 A5 비율 ROI를 반환합니다.
-
-    [신버전 변경점]
-    - IMAGE 모드: detect(mp_image) 사용
-    - 결과 좌표: bounding_box.origin_x/y, width, height → 절대 픽셀값
-      (구버전은 0~1 상대값이었음 → 직접 곱셈 불필요)
-    - confidence: detection.categories[0].score 로 접근
-
-    Returns:
-        A5 비율이 적용된 (x1, y1, x2, y2) 또는 None
+    MediaPipe FaceDetector로 얼굴을 감지하고 A4 비율 ROI를 반환합니다.
     """
     h, w = image.shape[:2]
     result = face_detector.detect(_to_mp_image(image))
@@ -200,20 +210,17 @@ def detect_face_and_get_roi(image: np.ndarray) -> tuple | None:
     best = max(result.detections, key=lambda d: d.categories[0].score)
     bb = best.bounding_box
 
-    # 신버전: bounding_box 는 이미 절대 픽셀값
     fx, fy   = bb.origin_x, bb.origin_y
     fw, fh   = bb.width,    bb.height
 
-    # 얼굴 여백 추가 (위쪽=이마/머리, 아래쪽=턱 비대칭 패딩)
-    pad_w        = int(fw * 0.2)
-    pad_top      = int(fh * 0.5)   # 이마/머리 위 여유를 크게
-    pad_bottom   = int(fh * 0.2)   # 턱 아래는 작게
+    # 얼굴 여백 추가
+    pad_w        = int(fw * 0.4)
+    pad_top      = int(fh * 0.8)
+    pad_bottom   = int(fh * 0.4)
     x1 = max(0, fx - pad_w)
     y1 = max(0, fy - pad_top)
     x2 = min(w, fx + fw + pad_w)
     y2 = min(h, fy + fh + pad_bottom)
 
-    # A5 비율 조정
-    x1, y1, x2, y2 = _adjust_roi_to_ratio(x1, y1, x2, y2, h, w)
-
-    return (x1, y1, x2, y2)
+    # A4 비율 조정
+    return _adjust_roi_to_ratio(x1, y1, x2, y2, h, w)
