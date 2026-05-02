@@ -96,6 +96,7 @@ class SketchGui(QMainWindow):
         self.current_frame = None
         self.captured_image = None # 초기화 명시
         self.character_image = None
+        self.step_images = {} # 각 단계별 이미지 저장 (줌 시 재기록용)
         
         self.zoom_factor = 1.0 # 기본 줌 배율
         self.preview_labels = [] # 스케일링할 라벨 목록 추적
@@ -204,6 +205,13 @@ class SketchGui(QMainWindow):
         self.update_character_list()
         right_layout.addWidget(self.combo_char)
 
+        # 캐릭터 동반 모드 상세 설정
+        self.lbl_char_prompt = QLabel("캐릭터 동반 상세 설정:")
+        right_layout.addWidget(self.lbl_char_prompt)
+        self.combo_char_prompt = QComboBox()
+        self.combo_char_prompt.addItems(list(self.char_prompts_dict.keys()))
+        right_layout.addWidget(self.combo_char_prompt)
+
         # 펜 종류
         right_layout.addWidget(QLabel("펜 종류:"))
         self.combo_pen = QComboBox()
@@ -269,6 +277,8 @@ class SketchGui(QMainWindow):
         is_char_mode = self.combo_style.currentText() == "캐릭터 동반 모드"
         self.combo_char.setEnabled(is_char_mode)
         self.lbl_char.setEnabled(is_char_mode)
+        self.combo_char_prompt.setEnabled(is_char_mode)
+        self.lbl_char_prompt.setEnabled(is_char_mode)
 
     def start_camera(self):
         self.camera_thread = CameraThread()
@@ -295,8 +305,20 @@ class SketchGui(QMainWindow):
             self.captured_label.setPixmap(QPixmap.fromImage(qt_image).scaled(self.captured_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             
             self.status_label.setText("사진 촬영 완료. 설정을 확인 후 시작 버튼을 누르세요.")
-            # 촬영 시 중앙 단계 초기화
-            self.lbl_step_cropped.setText("준비 중...")
+            
+            # 자동 프리뷰: 객체/얼굴 추출 단계 미리 채우기
+            try:
+                face_roi = detect_face_and_get_roi(self.captured_image)
+                if face_roi:
+                    x1, y1, x2, y2 = face_roi
+                    cropped = self.captured_image[y1:y2, x1:x2]
+                    self.display_preview(self.lbl_step_cropped, cropped)
+                else:
+                    self.lbl_step_cropped.setText("얼굴을 찾을 수 없음")
+            except Exception:
+                self.lbl_step_cropped.setText("추출 실패")
+
+            # 촬영 시 다른 단계 초기화
             self.lbl_step_processed.setText("준비 중...")
             self.lbl_step_final.setText("준비 중...")
 
@@ -315,9 +337,29 @@ class SketchGui(QMainWindow):
                 
                 self.status_label.setText(f"파일 로드 완료: {os.path.basename(file_path)}")
 
+                # 자동 프리뷰: 객체/얼굴 추출 단계 미리 채우기
+                try:
+                    face_roi = detect_face_and_get_roi(self.captured_image)
+                    if face_roi:
+                        x1, y1, x2, y2 = face_roi
+                        cropped = self.captured_image[y1:y2, x1:x2]
+                        self.display_preview(self.lbl_step_cropped, cropped)
+                    else:
+                        self.lbl_step_cropped.setText("얼굴을 찾을 수 없음")
+                except Exception:
+                    self.lbl_step_cropped.setText("추출 실패")
+                
+                # 로드 시 다른 단계 초기화
+                self.lbl_step_processed.setText("준비 중...")
+                self.lbl_step_final.setText("준비 중...")
+
     def display_preview(self, label, frame):
         if frame is None or frame.size == 0:
             return
+        
+        # 줌 시 재기록을 위해 이미지 저장
+        self.step_images[label] = frame.copy()
+        
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
@@ -339,8 +381,9 @@ class SketchGui(QMainWindow):
         
         if style_text == "캐릭터 동반 모드":
             sketch_type = 'GEMINI_CHAR'
-            # 기본 프롬프트 사용 (캐릭터 동반 모드 선택 시 첫 번째 프롬프트)
-            prompt = list(self.char_prompts_dict.values())[0]
+            # 선택된 상세 프롬프트 사용
+            selected_char_style = self.combo_char_prompt.currentText()
+            prompt = self.char_prompts_dict.get(selected_char_style, list(self.char_prompts_dict.values())[0])
             char_file = self.combo_char.currentText()
             if char_file == "캐릭터 없음":
                 self.character_image = None
@@ -428,14 +471,20 @@ class SketchGui(QMainWindow):
         self.camera_label.setFixedSize(cam_w, cam_h)
         self.captured_label.setFixedSize(cam_w, cam_h)
         
-        # 3. 현재 표시된 이미지들 다시 그리기 (Pixmaps refresh)
-        if hasattr(self, 'captured_image'):
+        # 3. 저장된 모든 이미지들 다시 그리기 (줌 배율에 맞춰 리스케일링)
+        for lbl, img in self.step_images.items():
+            # display_preview를 직접 호출하면 step_images에 중복 저장되므로 로직 분리하거나 
+            # 단순히 여기서 리스케일링만 수행
+            rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
+            pixmap = QPixmap.fromImage(qt_image)
+            lbl.setPixmap(pixmap.scaled(lbl.width(), lbl.height(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
+        if hasattr(self, 'captured_image') and self.captured_image is not None:
             self.display_preview(self.captured_label, self.captured_image)
             
-        # 워커가 이미 완료한 단계가 있다면 해당 이미지들도 다시 그리기 
-        # (이미지 데이터를 객체에 저장해두지 않았으므로, 현재 화면에 있는 Pixmap을 기반으로 하거나
-        # 처리가 끝난 후라면 다시 로드하는 로직이 필요할 수 있음. 
-        # 여기서는 라벨 크기만 변경해도 display_preview가 호출되면 맞춰짐)
         self.status_label.setText(f"화면 배율: {int(self.zoom_factor * 100)}%")
 
     def closeEvent(self, event):
