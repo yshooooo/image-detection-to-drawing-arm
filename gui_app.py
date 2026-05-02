@@ -369,9 +369,27 @@ class SketchGui(QMainWindow):
         label.setPixmap(pixmap.scaled(label.width(), label.height(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
     def start_processing(self):
-        if not hasattr(self, 'captured_image'):
+        if not hasattr(self, 'captured_image') or self.captured_image is None:
             QMessageBox.warning(self, "경고", "먼저 사진을 촬영하거나 파일을 불러와야 합니다.")
             return
+
+        # 프리뷰 및 이미지 캐시 초기화
+        self.step_images = {}
+        for lbl in self.preview_labels:
+            lbl.clear()
+            lbl.setText("준비 중...")
+
+        # 객체/얼굴 추출 다시 수행 및 표시
+        try:
+            face_roi = detect_face_and_get_roi(self.captured_image)
+            if face_roi:
+                x1, y1, x2, y2 = face_roi
+                cropped = self.captured_image[y1:y2, x1:x2]
+                self.display_preview(self.lbl_step_cropped, cropped)
+            else:
+                self.lbl_step_cropped.setText("얼굴을 찾을 수 없음")
+        except Exception:
+            self.lbl_step_cropped.setText("추출 실패")
 
         # 설정값 수집
         style_text = self.combo_style.currentText()
