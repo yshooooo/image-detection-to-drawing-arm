@@ -156,15 +156,13 @@ class SketchGui(QMainWindow):
         self.preview_layout.setContentsMargins(5, 5, 5, 5) # 테두리 여백 최소화
         self.preview_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft) # 상단 좌측 정렬 고정
         
-        # 1번 원본은 왼쪽 카메라 라벨에 통합 예정이므로 여기서 제거
+        # 중앙 프리뷰 라벨 구성 변경 (2단계로 축소)
         self.lbl_step_cropped, w2 = self.create_preview_label("1. 객체/얼굴 추출")
-        self.lbl_step_processed, w3 = self.create_preview_label("2. 보정 및 배경 제거")
-        self.lbl_step_final, w4 = self.create_preview_label("3. 최종 스케치")
+        self.lbl_step_final, w4 = self.create_preview_label("2. 최종 스케치")
         
-        # 중앙 패널에 3개의 과정 배치 (한 줄로 가로 배치)
+        # 중앙 패널에 2개의 과정 배치
         self.preview_layout.addWidget(w2, 0, 0)
-        self.preview_layout.addWidget(w3, 0, 1)
-        self.preview_layout.addWidget(w4, 0, 2)
+        self.preview_layout.addWidget(w4, 0, 1)
         
         self.scroll_area.setWidget(self.preview_container)
         center_layout.addWidget(self.scroll_area)
@@ -319,7 +317,6 @@ class SketchGui(QMainWindow):
                 self.lbl_step_cropped.setText("추출 실패")
 
             # 촬영 시 다른 단계 초기화
-            self.lbl_step_processed.setText("준비 중...")
             self.lbl_step_final.setText("준비 중...")
 
     def load_image_file(self):
@@ -350,7 +347,6 @@ class SketchGui(QMainWindow):
                     self.lbl_step_cropped.setText("추출 실패")
                 
                 # 로드 시 다른 단계 초기화
-                self.lbl_step_processed.setText("준비 중...")
                 self.lbl_step_final.setText("준비 중...")
 
     def display_preview(self, label, frame):
@@ -436,8 +432,6 @@ class SketchGui(QMainWindow):
         if image.size > 0:
             if step_id == "cropped" or step_id == "face_cropped":
                 self.display_preview(self.lbl_step_cropped, image)
-            elif step_id == "preprocessed":
-                self.display_preview(self.lbl_step_processed, image)
             elif step_id == "sketch" or step_id == "done":
                 self.display_preview(self.lbl_step_final, image)
 
