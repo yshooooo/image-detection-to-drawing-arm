@@ -38,6 +38,8 @@ class CameraThread(QThread):
         self._frame_count = 0
         self._last_face_roi = None
         self._detect_interval = 6
+        self._sbs_locked = False
+        self._sbs_full_width = None
 
     def run(self):
         # ZED 카메라 로직
@@ -98,10 +100,27 @@ class CameraThread(QThread):
         cap.release()
 
     def process_and_emit(self, frame):
-        # ZED 카메라가 OpenCV로 열릴 경우 (가로가 세로의 2배인 경우) 왼쪽 절반만 크롭
+        # ZED SBS(좌우 분할) 프레임은 한 번 감지되면 잠금하여
+        # 간헐적인 1프레임 원본(분할화면) 노출을 방지
         h, w = frame.shape[:2]
-        if w >= h * 1.8: # ZED Side-by-Side 대응
-            frame = frame[:, :w//2]
+        if (not self._sbs_locked) and (w >= h * 1.8):
+            self._sbs_locked = True
+            self._sbs_full_width = w
+
+        if self._sbs_locked and self._sbs_full_width:
+            full_w = self._sbs_full_width
+            half_w = full_w // 2
+            # full 폭에 가까운 프레임은 항상 왼쪽 절반으로 고정 크롭
+            if abs(w - full_w) <= max(8, int(full_w * 0.2)):
+                frame = frame[:, :w // 2]
+            # half 폭에 가까운 프레임은 이미 크롭된 것으로 간주
+            elif abs(w - half_w) <= max(8, int(half_w * 0.2)):
+                pass
+            # 알 수 없는 해상도 변동 시에도 분할로 보이면 보수적으로 크롭
+            elif w >= h * 1.8:
+                frame = frame[:, :w // 2]
+        elif w >= h * 1.8:
+            frame = frame[:, :w // 2]
 
         display_frame = frame.copy()
         try:

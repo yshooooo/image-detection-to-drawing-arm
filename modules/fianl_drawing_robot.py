@@ -23,6 +23,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_PY = os.path.join(BASE_DIR, "output_linear.py")
 Y_Z_TOTAL_OFFSET = -0.6
 Y_INTERPOLATION_LENGTH = 100.0
+NORMALIZE_TO_FIXED_BOX = False
+RAW_COORD_SCALE = 1.0
 TARGET_DRAW_WIDTH_MM = 100.0
 TARGET_DRAW_HEIGHT_MM = 100.0
 SELECTED_PEN = "pen"
@@ -43,18 +45,18 @@ PEN_TCP_MAP = {
 PEN_PICK_CONFIG = {
     "pen": {
         "pick_pos": (89.10, 3.55, -76.70, -13.07, -89.77, 77.07),
-        "pick_pose_down": (-91.69, -398.49, 366.76, 168.17, -177.60, 172.04),
-        "pick_pose_up": (-91.69, -398.49, 566.76, 168.17, -177.60, 172.04),
+        "pick_pose_down": (-81.69, -402.49, 366.76, 0, 180, 0),
+        "pick_pose_up": (-81.69, -402.49, 566.76, 0, 180, 0),
     },
     "name": {
         "pick_pos": (89.10, 3.55, -76.70, -13.07, -89.77, 77.07),
-        "pick_pose_down": (-27.64, -397.54, 361.28, 48.82, -178.55, 49.67),
-        "pick_pose_up": (-27.64, -397.54, 461.28, 48.82, -178.55, 49.67),
+        "pick_pose_down": (-31.69, -402.49, 366.76, 0, 180, 0),
+        "pick_pose_up": (-31.69, -402.49, 566.76, 0, 180, 0),
     },
     "maka": {
         "pick_pos": (89.10, 3.55, -76.70, -13.07, -89.77, 77.07),
-        "pick_pose_down": (22.64, -397.54, 361.28, 48.82, -178.55, 49.67),
-        "pick_pose_up": (22.64, -397.54, 461.28, 48.82, -178.55, 49.67),
+        "pick_pose_down": (17.69, -404.49, 366.76, 0, 180, 0) ,
+        "pick_pose_up": (17.69, -404.49, 566.76, 0, 180, 0),
     },
 }
 
@@ -116,7 +118,7 @@ def gcode_to_dsr_function(input_nc, output_py):
         if z_match:
             current_z = float(z_match.group(1))
 
-        points.append((current_x / 3, current_y / 3, current_z))
+        points.append((current_x * RAW_COORD_SCALE, current_y * RAW_COORD_SCALE, current_z))
 
     print(f"원래 점 개수: {len(points)}")
     points = compress_path(points)
@@ -125,29 +127,35 @@ def gcode_to_dsr_function(input_nc, output_py):
     if not points:
         raise ValueError("G-code에서 유효한 좌표를 찾지 못했습니다.")
 
-    # 입력 G-code bbox를 고정 물리 크기(mm) 박스로 정규화
     xs = [x for x, _, _ in points]
     ys = [y for _, y, _ in points]
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     span_x = max_x - min_x
     span_y = max_y - min_y
-    if span_x <= 1e-9 or span_y <= 1e-9:
-        raise ValueError("G-code 경로 크기가 너무 작아 정규화할 수 없습니다.")
-    mm_scale = min(TARGET_DRAW_WIDTH_MM / span_x, TARGET_DRAW_HEIGHT_MM / span_y)
-    points = [
-        ((x - min_x) * mm_scale, (y - min_y) * mm_scale, z)
-        for x, y, z in points
-    ]
+
+    if NORMALIZE_TO_FIXED_BOX:
+        # 필요할 때만 고정 물리 크기(mm) 박스로 정규화
+        if span_x <= 1e-9 or span_y <= 1e-9:
+            raise ValueError("G-code 경로 크기가 너무 작아 정규화할 수 없습니다.")
+        mm_scale = min(TARGET_DRAW_WIDTH_MM / span_x, TARGET_DRAW_HEIGHT_MM / span_y)
+        points = [
+            ((x - min_x) * mm_scale, (y - min_y) * mm_scale, z)
+            for x, y, z in points
+        ]
+        ys = [y for _, y, _ in points]
+        min_y, max_y = min(ys), max(ys)
+        span_y = max_y - min_y
 
     y_values = [y for _, y, _ in points]
     y_start = max(y_values)
+    y_interp_len = span_y if span_y > 1e-9 else Y_INTERPOLATION_LENGTH
 
     output = []
     output.append("from DSR_ROBOT2 import movel, posx\n\n")
     output.append(f"Y_START = {y_start:.6f}\n")
     output.append(f"Y_Z_TOTAL_OFFSET = {Y_Z_TOTAL_OFFSET:.6f}\n")
-    output.append(f"Y_INTERPOLATION_LENGTH = {Y_INTERPOLATION_LENGTH:.6f}\n\n")
+    output.append(f"Y_INTERPOLATION_LENGTH = {y_interp_len:.6f}\n\n")
     output.append("def calc_z_offset(dy):\n")
     output.append("    if Y_INTERPOLATION_LENGTH <= 0:\n")
     output.append("        return 0.0\n")
@@ -266,7 +274,7 @@ def main(args=None):
     set_robot_mode(1)
     time.sleep(0.5)
 
-    movej(p1, vel=30, acc=30)
+    # movej(p1, vel=30, acc=30)
     open_gripper()
     movej(pick_pos, vel=30, acc=30)
     movel(pick_pose_up, vel=100, acc=100)
