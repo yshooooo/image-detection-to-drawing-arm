@@ -41,19 +41,20 @@ class WorkerThread(QThread):
     finished_signal = pyqtSignal(list)
     error_signal = pyqtSignal(str)
     def __init__(self, processor, image, sketch_type, gemini_api_key=None, 
-                 gemini_prompt=None, pen_config=None):
+                 gemini_prompt=None, character_image=None, pen_config=None):
         super().__init__()
         self.processor = processor
         self.image = image
         self.sketch_type = sketch_type
         self.gemini_api_key = gemini_api_key
         self.gemini_prompt = gemini_prompt
+        self.character_image = character_image
         self.pen_config = pen_config
     def run(self):
         try:
             results = self.processor.process(
                 self.image, self.sketch_type, self.gemini_api_key, 
-                self.gemini_prompt, None, self.pen_config,
+                self.gemini_prompt, self.character_image, self.pen_config,
                 progress_callback=self.emit_progress
             )
             self.finished_signal.emit(results if results else [])
@@ -101,7 +102,6 @@ class KioskUserGui(QMainWindow):
         # 2. 중앙: 카메라 레이아웃
         self.camera_container = QFrame()
         self.camera_container.setStyleSheet("background-color: black; border: 5px solid #2196F3; border-radius: 10px;")
-        # 컨테이너가 확장 가능한 크기 정책을 갖도록 설정
         self.camera_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         self.cam_grid = QGridLayout(self.camera_container)
@@ -109,7 +109,6 @@ class KioskUserGui(QMainWindow):
         
         self.camera_label = QLabel()
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # 중요: 라벨이 레이아웃을 밀어내지 않도록 Ignored 설정
         self.camera_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.cam_grid.addWidget(self.camera_label, 0, 0)
         
@@ -128,19 +127,35 @@ class KioskUserGui(QMainWindow):
         self.progress_bar.setFixedHeight(30)
         self.main_layout.addWidget(self.progress_bar)
 
-        # 4. 하단: 스타일 선택 버튼들
+        # 4. 하단: 스타일 및 캐릭터 버튼들
         self.button_container = QWidget()
         self.btn_layout = QHBoxLayout(self.button_container)
         self.btn_layout.setSpacing(20)
         
+        # 일반 스타일 버튼
         colors = ["#F44336", "#4CAF50", "#FFC107", "#9C27B0"]
         for i, (name, prompt) in enumerate(self.prompts_dict.items()):
             btn = QPushButton(name.split(".")[-1].strip())
-            btn.setFixedHeight(150)
+            btn.setFixedHeight(120)
             color = colors[i % len(colors)]
-            btn.setStyleSheet(f"background-color: {color}; color: white; font-size: 24px; font-weight: bold; border-radius: 15px;")
-            btn.clicked.connect(lambda checked, p=prompt: self.start_kiosk_flow(p))
+            btn.setStyleSheet(f"background-color: {color}; color: white; font-size: 20px; font-weight: bold; border-radius: 15px;")
+            btn.clicked.connect(lambda checked, p=prompt: self.start_kiosk_flow("GEMINI", p))
             self.btn_layout.addWidget(btn)
+
+        # 캐릭터 버튼 추가
+        self.char_prompts_dict = config.load_character_prompts()
+        if os.path.exists(config.CHARACTERS_DIR):
+            char_files = [f for f in os.listdir(config.CHARACTERS_DIR) 
+                          if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            for f in char_files:
+                char_name = os.path.splitext(f)[0]
+                btn = QPushButton(f"🐾 {char_name}")
+                btn.setFixedHeight(120)
+                btn.setStyleSheet("background-color: #607D8B; color: white; font-size: 20px; font-weight: bold; border-radius: 15px;")
+                # 첫 번째 캐릭터 프롬프트를 기본으로 사용
+                char_prompt = list(self.char_prompts_dict.values())[0]
+                btn.clicked.connect(lambda checked, p=char_prompt, img=f: self.start_kiosk_flow("GEMINI_CHAR", p, img))
+                self.btn_layout.addWidget(btn)
             
         self.main_layout.addWidget(self.button_container)
 
@@ -157,14 +172,16 @@ class KioskUserGui(QMainWindow):
             qt_image = QImage(rgb_image.data, w, h, ch*w, QImage.Format.Format_RGB888).copy()
             pixmap = QPixmap.fromImage(qt_image)
             
-            # 라벨이 아닌 실제 컨테이너의 현재 크기를 기준으로 이미지를 맞춤 (Feedback Loop 방지)
             target_size = self.camera_container.size()
             if target_size.width() > 0 and target_size.height() > 0:
                 scaled_pixmap = pixmap.scaled(target_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 self.camera_label.setPixmap(scaled_pixmap)
 
-    def start_kiosk_flow(self, prompt):
+    def start_kiosk_flow(self, sketch_type, prompt, char_filename=None):
+        self.selected_sketch_type = sketch_type
         self.selected_prompt = prompt
+        self.selected_char_filename = char_filename
+        
         self.button_container.setEnabled(False)
         self.instruction_label.setText("준비하세요!")
         
@@ -195,10 +212,16 @@ class KioskUserGui(QMainWindow):
                 self.reset_to_standby()
                 return
 
+            character_image = None
+            if self.selected_sketch_type == "GEMINI_CHAR" and self.selected_char_filename:
+                char_path = os.path.join(config.CHARACTERS_DIR, self.selected_char_filename)
+                img_array = np.fromfile(char_path, np.uint8)
+                character_image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
             self.worker = WorkerThread(
-                SketchProcessor(), self.captured_image, 'GEMINI',
+                SketchProcessor(), self.captured_image, self.selected_sketch_type,
                 gemini_api_key=self.api_key, gemini_prompt=self.selected_prompt,
-                pen_config=self.default_pen
+                character_image=character_image, pen_config=self.default_pen
             )
             self.worker.progress_signal.connect(self.on_worker_progress)
             self.worker.finished_signal.connect(self.on_worker_finished)

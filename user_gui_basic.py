@@ -63,20 +63,21 @@ class WorkerThread(QThread):
     error_signal = pyqtSignal(str)
 
     def __init__(self, processor, image, sketch_type, gemini_api_key=None, 
-                 gemini_prompt=None, pen_config=None):
+                 gemini_prompt=None, character_image=None, pen_config=None):
         super().__init__()
         self.processor = processor
         self.image = image
         self.sketch_type = sketch_type
         self.gemini_api_key = gemini_api_key
         self.gemini_prompt = gemini_prompt
+        self.character_image = character_image
         self.pen_config = pen_config
 
     def run(self):
         try:
             results = self.processor.process(
                 self.image, self.sketch_type, self.gemini_api_key, 
-                self.gemini_prompt, None, self.pen_config,
+                self.gemini_prompt, self.character_image, self.pen_config,
                 progress_callback=self.emit_progress
             )
             self.finished_signal.emit(results if results else [])
@@ -116,7 +117,22 @@ class BasicUserGui(QMainWindow):
         style_layout = QHBoxLayout()
         style_layout.addWidget(QLabel("1. 스타일을 선택하세요:"))
         self.combo_style = QComboBox()
-        self.combo_style.addItems(list(self.prompts_dict.keys()))
+        
+        # 일반 스타일 추가
+        for name in self.prompts_dict.keys():
+            self.combo_style.addItem(name, ("GEMINI", None))
+            
+        # 캐릭터 스타일 동적 추가
+        self.char_prompts_dict = config.load_character_prompts()
+        if os.path.exists(config.CHARACTERS_DIR):
+            char_files = [f for f in os.listdir(config.CHARACTERS_DIR) 
+                          if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            for f in char_files:
+                display_name = f"🐾 {os.path.splitext(f)[0]}와 함께"
+                # 첫 번째 캐릭터 프롬프트를 기본으로 사용
+                char_prompt = list(self.char_prompts_dict.values())[0]
+                self.combo_style.addItem(display_name, ("GEMINI_CHAR", f, char_prompt))
+
         self.combo_style.setFixedHeight(40)
         style_layout.addWidget(self.combo_style)
         main_layout.addLayout(style_layout)
@@ -222,8 +238,19 @@ class BasicUserGui(QMainWindow):
             QMessageBox.critical(self, "오류", "Gemini API Key가 설정되지 않았습니다. (환경변수 확인)")
             return
 
-        style_text = self.combo_style.currentText()
-        prompt = self.prompts_dict[style_text]
+        # 선택된 데이터 정보 가져오기
+        data = self.combo_style.currentData()
+        sketch_type, info = data[0], data[1:]
+        
+        character_image = None
+        if sketch_type == "GEMINI":
+            style_text = self.combo_style.currentText()
+            prompt = self.prompts_dict[style_text]
+        else: # GEMINI_CHAR
+            char_filename, prompt = info[0], info[1]
+            char_path = os.path.join(config.CHARACTERS_DIR, char_filename)
+            img_array = np.fromfile(char_path, np.uint8)
+            character_image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
         self.btn_process.setEnabled(False)
         self.btn_retake.setEnabled(False)
@@ -232,9 +259,9 @@ class BasicUserGui(QMainWindow):
         self.progress_bar.setRange(0, 0)
 
         self.worker = WorkerThread(
-            self.processor, self.captured_image, 'GEMINI',
+            self.processor, self.captured_image, sketch_type,
             gemini_api_key=self.api_key, gemini_prompt=prompt, 
-            pen_config=self.default_pen
+            character_image=character_image, pen_config=self.default_pen
         )
         self.worker.progress_signal.connect(self.on_worker_progress)
         self.worker.finished_signal.connect(self.on_worker_finished)
