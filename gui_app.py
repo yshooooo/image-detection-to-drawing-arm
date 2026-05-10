@@ -296,9 +296,8 @@ class SketchGui(QMainWindow):
         right_layout.addWidget(QLabel("Gemini API Key:"))
         self.edit_api_key = QLineEdit()
         self.edit_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        if os.getenv("GEMINI_API_KEY"):
-            self.edit_api_key.setText(os.getenv("GEMINI_API_KEY"))
-            self.edit_api_key.setPlaceholderText("환경변수에서 로드됨")
+        self.edit_api_key.setText("AIzaSyAAepYJsbdwtrVseJe3pqf0hKfvRz_yk1w") # 여기에 실제 API 키 입력
+        self.edit_api_key.setPlaceholderText("API 키가 하드코딩됨")
         right_layout.addWidget(self.edit_api_key)
 
         right_layout.addStretch()
