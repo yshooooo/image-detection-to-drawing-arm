@@ -1,5 +1,7 @@
 import sys
 import os
+import re
+import subprocess
 import cv2
 import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -9,42 +11,113 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 
+try:
+    import pyzed.sl as sl
+    ZED_AVAILABLE = True
+except ImportError:
+    ZED_AVAILABLE = False
+
 from modules import config
 from modules.sketch_processor import SketchProcessor
 from modules.human_cropper import detect_face_and_get_roi
 
+PEN_TCP_ARG_MAP = {
+    "볼펜": "pen",
+    "네임펜": "name",
+    "마카": "maka",
+}
+
 class CameraThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
+    status_signal = pyqtSignal(str)
 
     def __init__(self, source=0):
         super().__init__()
         self.source = source
         self._run_flag = True
+        self._frame_count = 0
+        self._last_face_roi = None
+        self._detect_interval = 6
 
     def run(self):
-        # source가 'ZED'일 경우 ZED 라이브러리 연동이 필요할 수 있으나, 
-        # 여기서는 일반 웹캠(0, 1...) 또는 파일 경로를 가정합니다.
-        # ZED 사용 시 modules/camera_capture.py의 로직을 스레드화해야 함.
-        cap = cv2.VideoCapture(self.source)
+        # ZED 카메라 로직
+        if ZED_AVAILABLE and (self.source == 'ZED' or str(self.source).lower() == 'zed'):
+            print(">> [Camera] ZED SDK 모드로 시작합니다.")
+            zed = sl.Camera()
+            init_params = sl.InitParameters()
+            init_params.camera_resolution = sl.RESOLUTION.HD720
+            init_params.depth_mode = sl.DEPTH_MODE.NONE
+            
+            err = zed.open(init_params)
+            if err != sl.ERROR_CODE.SUCCESS:
+                msg = f"ZED SDK 오픈 실패: {err}"
+                print(f"❌ {msg}")
+                self.status_signal.emit(msg)
+                return
+
+            image_zed = sl.Mat()
+            while self._run_flag:
+                if zed.grab() == sl.ERROR_CODE.SUCCESS:
+                    zed.retrieve_image(image_zed, sl.VIEW.LEFT)
+                    frame_bgra = image_zed.get_data()
+                    frame = cv2.cvtColor(frame_bgra, cv2.COLOR_BGRA2BGR)
+                    self.process_and_emit(frame)
+                else:
+                    self.status_signal.emit("ZED 프레임 grab 실패")
+            zed.close()
+        else:
+            print(f">> [Camera] 일반 OpenCV 모드로 시작합니다. (Source: {self.source})")
+            source_idx = 0
+            try:
+                source_idx = int(self.source)
+            except (ValueError, TypeError):
+                source_idx = 0
+            self.run_opencv_capture(source_idx)
+
+    def run_opencv_capture(self, source_idx):
+        cap = cv2.VideoCapture(source_idx)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        fail_count = 0
         while self._run_flag:
             ret, frame = cap.read()
             if ret:
-                # 실시간 얼굴 감지 및 박스 그리기
-                display_frame = frame.copy()
-                try:
-                    face_roi = detect_face_and_get_roi(frame)
-                    if face_roi:
-                        x1, y1, x2, y2 = face_roi
-                        # 초록색 사각형 그리기 (BGR: (0, 255, 0), 두께: 2)
-                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        # "ROI" 텍스트 추가
-                        cv2.putText(display_frame, "ROI", (x1, y1 - 10), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                except Exception:
-                    pass # 실시간 피드 중 오류 발생 시 무시 (성능 최우선)
-
-                self.change_pixmap_signal.emit(display_frame)
+                fail_count = 0
+                self.process_and_emit(frame)
+            else:
+                fail_count += 1
+                if fail_count == 1:
+                    self.status_signal.emit(f"카메라 프레임 수신 실패(source={source_idx})")
+                if fail_count >= 30:
+                    self.status_signal.emit("카메라 재연결 시도 중...")
+                    cap.release()
+                    time.sleep(0.3)
+                    cap = cv2.VideoCapture(source_idx)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    fail_count = 0
+                    time.sleep(0.1)
         cap.release()
+
+    def process_and_emit(self, frame):
+        # ZED 카메라가 OpenCV로 열릴 경우 (가로가 세로의 2배인 경우) 왼쪽 절반만 크롭
+        h, w = frame.shape[:2]
+        if w >= h * 1.8: # ZED Side-by-Side 대응
+            frame = frame[:, :w//2]
+
+        display_frame = frame.copy()
+        try:
+            self._frame_count += 1
+            face_roi = self._last_face_roi
+            if self._frame_count % self._detect_interval == 0:
+                face_roi = detect_face_and_get_roi(frame)
+                self._last_face_roi = face_roi
+            if face_roi:
+                x1, y1, x2, y2 = face_roi
+                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(display_frame, "ROI", (x1, y1 - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        except Exception:
+            pass
+        self.change_pixmap_signal.emit(display_frame)
 
     def stop(self):
         self._run_flag = False
@@ -96,6 +169,7 @@ class SketchGui(QMainWindow):
         self.current_frame = None
         self.captured_image = None # 초기화 명시
         self.character_image = None
+        self.latest_nc_path = None
         self.step_images = {} # 각 단계별 이미지 저장 (줌 시 재기록용)
         
         self.zoom_factor = 1.0 # 기본 줌 배율
@@ -182,10 +256,11 @@ class SketchGui(QMainWindow):
         right_panel = QGroupBox("사용자 컨트롤")
         right_layout = QVBoxLayout()
 
-        # 입력 소스 (현재는 단순화)
+        # 입력 소스
         right_layout.addWidget(QLabel("입력 소스:"))
         self.combo_source = QComboBox()
-        self.combo_source.addItems(["웹캠 (기본)", "ZED 카메라 (준비중)"])
+        self.combo_source.addItems(["웹캠 (기본)", "ZED 카메라"])
+        self.combo_source.currentIndexChanged.connect(self.on_source_changed)
         right_layout.addWidget(self.combo_source)
 
         # 스타일 선택
@@ -227,6 +302,19 @@ class SketchGui(QMainWindow):
         right_layout.addWidget(self.edit_api_key)
 
         right_layout.addStretch()
+
+        self.btn_run_local_robot = QPushButton("로컬 G-Code 로봇 실행")
+        self.btn_run_local_robot.setFixedHeight(60)
+        self.btn_run_local_robot.setStyleSheet("background-color: #FF9800; color: white; font-size: 16px; font-weight: bold;")
+        self.btn_run_local_robot.clicked.connect(self.run_local_robot_drawing)
+        right_layout.addWidget(self.btn_run_local_robot)
+
+        self.btn_run_robot = QPushButton("로봇 실행")
+        self.btn_run_robot.setFixedHeight(60)
+        self.btn_run_robot.setStyleSheet("background-color: #2196F3; color: white; font-size: 16px; font-weight: bold;")
+        self.btn_run_robot.setEnabled(False)
+        self.btn_run_robot.clicked.connect(self.run_robot_drawing)
+        right_layout.addWidget(self.btn_run_robot)
 
         self.btn_process = QPushButton("변환 및 G-Code 생성 시작")
         self.btn_process.setFixedHeight(60)
@@ -278,10 +366,27 @@ class SketchGui(QMainWindow):
         self.combo_char_prompt.setEnabled(is_char_mode)
         self.lbl_char_prompt.setEnabled(is_char_mode)
 
+    def on_source_changed(self):
+        self.start_camera()
+
     def start_camera(self):
-        self.camera_thread = CameraThread()
+        if hasattr(self, 'camera_thread') and self.camera_thread.isRunning():
+            self.camera_thread.stop()
+            time.sleep(0.2)
+        
+        source_text = self.combo_source.currentText()
+        if source_text == "ZED 카메라":
+            source = 'ZED'
+        else:
+            source = 0
+            
+        self.camera_thread = CameraThread(source=source)
         self.camera_thread.change_pixmap_signal.connect(self.update_camera_feed)
+        self.camera_thread.status_signal.connect(self.on_camera_status)
         self.camera_thread.start()
+
+    def on_camera_status(self, message):
+        self.status_label.setText(message)
 
     def update_camera_feed(self, frame):
         self.current_frame = frame
@@ -294,6 +399,8 @@ class SketchGui(QMainWindow):
 
     def capture_image(self):
         if self.current_frame is not None:
+            self.latest_nc_path = None
+            self.btn_run_robot.setEnabled(False)
             self.captured_image = self.current_frame.copy()
             # 실시간 카메라는 그대로 두고, 아래 별도 라벨(captured_label)에 촬영된 사진 표시
             rgb_image = cv2.cvtColor(self.captured_image, cv2.COLOR_BGR2RGB)
@@ -322,6 +429,8 @@ class SketchGui(QMainWindow):
     def load_image_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "이미지 선택", config.GENERAL_INPUT_DIR, "Images (*.png *.jpg *.jpeg)")
         if file_path:
+            self.latest_nc_path = None
+            self.btn_run_robot.setEnabled(False)
             img_array = np.fromfile(file_path, np.uint8)
             self.captured_image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             if self.captured_image is not None:
@@ -363,6 +472,78 @@ class SketchGui(QMainWindow):
         pixmap = QPixmap.fromImage(qt_image)
         # 비율을 유지하며 라벨 크기에 맞춰 스케일링 (왜곡 방지)
         label.setPixmap(pixmap.scaled(label.width(), label.height(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
+    def load_local_gcode_preview(self, nc_path):
+        base_path, _ = os.path.splitext(nc_path)
+
+        for ext in (".png", ".jpg", ".jpeg", ".bmp"):
+            image_path = base_path + ext
+            if os.path.exists(image_path):
+                img_array = np.fromfile(image_path, np.uint8)
+                image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                if image is not None:
+                    return image
+
+        return self.render_gcode_preview(nc_path)
+
+    def render_gcode_preview(self, nc_path, canvas_size=1024, margin=40):
+        points = []
+        pen_down = False
+        current_x = None
+        current_y = None
+
+        with open(nc_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("%") or line.startswith("("):
+                    continue
+
+                z_match = re.search(r"Z([-+]?\d*\.?\d+)", line)
+                if z_match:
+                    pen_down = float(z_match.group(1)) <= 0
+
+                x_match = re.search(r"X([-+]?\d*\.?\d+)", line)
+                y_match = re.search(r"Y([-+]?\d*\.?\d+)", line)
+                next_x = current_x if x_match is None else float(x_match.group(1))
+                next_y = current_y if y_match is None else float(y_match.group(1))
+
+                if line.startswith(("G0", "G1")) and next_x is not None and next_y is not None:
+                    if pen_down and current_x is not None and current_y is not None:
+                        points.append(((current_x, current_y), (next_x, next_y)))
+                    current_x, current_y = next_x, next_y
+
+        canvas = np.full((canvas_size, canvas_size, 3), 255, dtype=np.uint8)
+        if not points:
+            cv2.putText(
+                canvas,
+                "G-code preview unavailable",
+                (120, canvas_size // 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 0, 0),
+                2,
+                cv2.LINE_AA,
+            )
+            return canvas
+
+        all_x = [p[0] for seg in points for p in seg]
+        all_y = [p[1] for seg in points for p in seg]
+        min_x, max_x = min(all_x), max(all_x)
+        min_y, max_y = min(all_y), max(all_y)
+
+        span_x = max(max_x - min_x, 1e-6)
+        span_y = max(max_y - min_y, 1e-6)
+        scale = min((canvas_size - 2 * margin) / span_x, (canvas_size - 2 * margin) / span_y)
+
+        def project(point):
+            px = int(round((point[0] - min_x) * scale + margin))
+            py = int(round((max_y - point[1]) * scale + margin))
+            return px, py
+
+        for start, end in points:
+            cv2.line(canvas, project(start), project(end), (0, 0, 0), 2, cv2.LINE_AA)
+
+        return canvas
 
     def start_processing(self):
         if not hasattr(self, 'captured_image') or self.captured_image is None:
@@ -445,11 +626,71 @@ class SketchGui(QMainWindow):
         self.btn_process.setEnabled(True)
         self.progress_bar.setVisible(False)
         if results:
-            QMessageBox.information(self, "완료", f"처리가 완료되었습니다.\n저장 경로: {results[0]}")
-            self.status_label.setText("모든 작업 완료.")
+            nc_path = results[0]
+            self.latest_nc_path = nc_path
+            self.btn_run_robot.setEnabled(True)
+            QMessageBox.information(
+                self,
+                "완료",
+                f"처리가 완료되었습니다.\n저장 경로: {nc_path}\n위의 '로봇 실행' 버튼으로 드로잉을 시작할 수 있습니다."
+            )
+            self.status_label.setText("G-Code 생성 완료. 로봇 실행 버튼을 누르세요.")
         else:
             QMessageBox.critical(self, "오류", "이미지 처리 중 오류가 발생했습니다.")
             self.status_label.setText("작업 실패.")
+
+    def run_robot_drawing(self):
+        if not self.latest_nc_path:
+            QMessageBox.warning(self, "경고", "먼저 G-Code를 생성해야 합니다.")
+            return
+
+        if not self.run_robot_script(self.latest_nc_path):
+            self.btn_run_robot.setEnabled(False)
+
+    def run_local_robot_drawing(self):
+        local_gcode_path = config.LOCAL_GCODE_PATH
+        if not os.path.exists(local_gcode_path):
+            QMessageBox.warning(
+                self,
+                "경고",
+                f"로컬 G-Code 파일을 찾을 수 없습니다.\n{local_gcode_path}"
+            )
+            return
+
+        try:
+            preview = self.load_local_gcode_preview(local_gcode_path)
+            self.display_preview(self.lbl_step_final, preview)
+            self.status_label.setText(f"로컬 G-Code 프리뷰 로드 완료: {os.path.basename(local_gcode_path)}")
+        except Exception as e:
+            self.lbl_step_final.setText("로컬 G-Code 프리뷰 실패")
+            self.status_label.setText(f"로컬 G-Code 프리뷰 실패: {e}")
+
+        self.run_robot_script(local_gcode_path)
+
+    def run_robot_script(self, gcode_path):
+        if not os.path.exists(gcode_path):
+            QMessageBox.warning(self, "경고", f"G-Code 파일을 찾을 수 없습니다.\n{gcode_path}")
+            return False
+
+        robot_script = os.path.join(os.path.dirname(__file__), "modules", "fianl_drawing_robot.py")
+        pen_name = self.combo_pen.currentText()
+        pen_arg = PEN_TCP_ARG_MAP.get(pen_name, "pen")
+        try:
+            subprocess.Popen([sys.executable, robot_script, gcode_path, pen_arg])
+            self.status_label.setText("로봇 드로잉을 시작했습니다.")
+            QMessageBox.information(
+                self,
+                "로봇 실행",
+                f"로봇 드로잉을 시작했습니다.\n사용 파일: {gcode_path}\n선택 펜: {pen_name} ({pen_arg})"
+            )
+            return True
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "로봇 실행 실패",
+                f"로봇 실행에 실패했습니다.\n오류: {e}"
+            )
+            return False
 
     def wheelEvent(self, event):
         # Ctrl 키가 눌린 상태에서 휠을 돌릴 때만 줌 작동

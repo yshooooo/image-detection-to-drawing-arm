@@ -7,6 +7,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 # 사용자가 이미지를 넣는 공용 폴더
 GENERAL_INPUT_DIR = os.path.join(DATA_DIR, "raw") 
+# 사용자가 직접 넣어둘 로컬 G-code 파일 경로
+LOCAL_GCODE_PATH = os.path.join(DATA_DIR, "local_robot_input.nc")
 # 합성용 캐릭터 이미지가 저장되는 폴더
 CHARACTERS_DIR = os.path.join(DATA_DIR, "characters")
 
@@ -109,14 +111,18 @@ class PenConfig:
 
 # 기본 펜 설정 프리셋
 PEN_PRESETS = {
-    "네임펜 (기본)": PenConfig("네임펜 (기본)", z_safe=10.0, z_draw=0.0, feed_rate=1000, scale=0.2),
+    "네임펜": PenConfig("네임펜", z_safe=10.0, z_draw=0.0, feed_rate=1000, scale=0.2),
     "볼펜": PenConfig("볼펜", z_safe=10.0, z_draw=-0.5, feed_rate=800, scale=0.2),
-    "샤프/연필": PenConfig("샤프/연필", z_safe=10.0, z_draw=0.2, feed_rate=1200, scale=0.2),
-    "사인펜": PenConfig("사인펜", z_safe=10.0, z_draw=0.5, feed_rate=1000, scale=0.2)
+    "마카": PenConfig("마카", z_safe=10.0, z_draw=0.5, feed_rate=1000, scale=0.2),
 }
 
 # 하위 호환성을 위한 기본값 유지
-Z_SAFE = PEN_PRESETS["네임펜 (기본)"].z_safe
-Z_DRAW = PEN_PRESETS["네임펜 (기본)"].z_draw
-FEED_RATE = PEN_PRESETS["네임펜 (기본)"].feed_rate
-SCALE = PEN_PRESETS["네임펜 (기본)"].scale
+Z_SAFE = PEN_PRESETS["네임펜"].z_safe
+Z_DRAW = PEN_PRESETS["네임펜"].z_draw
+FEED_RATE = PEN_PRESETS["네임펜"].feed_rate
+SCALE = PEN_PRESETS["네임펜"].scale
+
+# 출력 도형 물리 크기 정규화(mm)
+# 경로의 bbox를 아래 박스 안에 맞추고, 비율은 유지합니다.
+TARGET_DRAW_WIDTH_MM = 100.0
+TARGET_DRAW_HEIGHT_MM = 100.0

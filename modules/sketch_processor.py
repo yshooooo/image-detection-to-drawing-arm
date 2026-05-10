@@ -34,7 +34,7 @@ class SketchProcessor:
                                signature: callback(step_id, image, message)
         """
         if pen_config is None:
-            pen_config = config.PEN_PRESETS["네임펜 (기본)"]
+            pen_config = config.PEN_PRESETS["네임펜"]
 
         # 사진별 저장 경로 설정
         photo_name = f"{self.photo_counter}_gui_capture"

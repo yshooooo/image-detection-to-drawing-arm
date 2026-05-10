@@ -3,7 +3,13 @@ import numpy as np
 import os
 import svgwrite
 from scipy.interpolate import splprep, splev  # B-Spline을 위한 SciPy 라이브러리 추가
-from .config import Z_SAFE, Z_DRAW, FEED_RATE, SCALE
+from .config import (
+    Z_SAFE,
+    Z_DRAW,
+    FEED_RATE,
+    TARGET_DRAW_WIDTH_MM,
+    TARGET_DRAW_HEIGHT_MM,
+)
 
 def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_filepath: str) -> bool:
     """
@@ -78,6 +84,25 @@ def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_file
     
     dwg = svgwrite.Drawing(svg_filepath, profile='tiny', size=(w, h), viewBox=f"0 0 {w} {h}")
     count = 0
+
+    # 모든 경로의 픽셀 bbox를 계산해 물리 크기를 일정한 박스(mm)로 정규화
+    all_points = [pt for path in paths for pt in path]
+    if not all_points:
+        print("[오류] 추출된 경로가 없습니다.")
+        return False
+    xs = [p[0] for p in all_points]
+    ys = [p[1] for p in all_points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span_x = max_x - min_x
+    span_y = max_y - min_y
+    if span_x <= 1e-9 or span_y <= 1e-9:
+        print("[오류] 경로 크기가 너무 작아 정규화할 수 없습니다.")
+        return False
+
+    scale_x = TARGET_DRAW_WIDTH_MM / span_x
+    scale_y = TARGET_DRAW_HEIGHT_MM / span_y
+    mm_scale = min(scale_x, scale_y)
     
     try:
         with open(nc_filepath, 'w') as f:
@@ -90,13 +115,15 @@ def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_file
                 dwg.add(dwg.polyline(path, stroke='black', fill='none', stroke_width=1))
                 
                 start_p = path[0]
-                sx, sy = start_p[0] * SCALE, start_p[1] * SCALE
+                sx = (start_p[0] - min_x) * mm_scale
+                sy = (start_p[1] - min_y) * mm_scale
                 
                 f.write(f"G0 X{sx:.3f} Y{-sy:.3f}\n")
                 f.write(f"G1 Z{Z_DRAW} F{FEED_RATE}\n")
                 
                 for j in range(1, len(path)):
-                    px, py = path[j][0] * SCALE, path[j][1] * SCALE
+                    px = (path[j][0] - min_x) * mm_scale
+                    py = (path[j][1] - min_y) * mm_scale
                     f.write(f"G1 X{px:.3f} Y{-py:.3f}\n")
                 
                 f.write(f"G0 Z{Z_SAFE}\n")
