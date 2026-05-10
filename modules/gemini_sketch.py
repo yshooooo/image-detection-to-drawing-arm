@@ -8,10 +8,11 @@ from google.genai import types
 # --- Gemini API 설정 ---
 MODEL_ID = "gemini-3.1-flash-image-preview"
 
-def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: str = None, style_name: str = "Gemini") -> np.ndarray:
+def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: str = None, style_name: str = "Gemini", character_image_bgr: np.ndarray = None) -> np.ndarray:
     """
     OpenCV 이미지를 입력받아 Gemini API를 사용하여 세선화에 최적화된 고품질 선화를 생성합니다.
     서버 과부하(503 등) 발생 시 자동으로 재시도하며 실행 시간을 측정합니다.
+    character_image_bgr이 제공되면 두 이미지를 합성하여 그립니다.
     """
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY")
@@ -21,8 +22,25 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
         return None
 
     if not prompt:
-        print(f"\n[{style_name}] [오류] 프롬프트가 제공되지 않았습니다.")
-        return None
+        if character_image_bgr is not None:
+            prompt = (
+                "Combine the person from the first image and the character from the second image into a single, cohesive scene. "
+                "Draw them interacting or standing together naturally. "
+                "Render the entire drawing as a high-quality, pure black line art caricature. "
+                "The entire drawing must be rendered exclusively with lines of exactly the same thickness (uniform line weight, minimal width) using only solid black ink. "
+                "Only solid black lines on a clean white background. No filling, shading, or gradients. "
+                "The lines should be precise and appear machine-drawn for direct path tracing."
+            )
+        else:
+            prompt = (
+                "A high-quality, pure black line art caricature based on the provided image. "
+                "The entire drawing is rendered exclusively with lines of exactly the same thickness "
+                "(uniform line weight, minimal width) using only solid black ink. "
+                "The lines are precise, unwavering, and appear machine-drawn for direct path tracing. "
+                "Only solid black lines on a clean white background. "
+                "No other colors, gradients, shading, or textures are present. "
+                "Minimalist geometric details. Focus purely on the continuity of the lines and the main simplified shape."
+            )
 
     print(f">> [{style_name}] Gemini API({MODEL_ID})를 사용하여 선화 추출을 시작합니다.")
 
@@ -36,9 +54,33 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
             # 1. OpenCV 이미지(BGR)를 PNG 바이트로 인코딩
             success, encoded_image = cv2.imencode(".png", image_bgr)
             if not success:
-                print(f"[{style_name}] [오류] 이미지 인코딩에 실패했습니다.")
+                print(f"[{style_name}] [오류] 메인 이미지 인코딩에 실패했습니다.")
                 return None
-            image_bytes = encoded_image.tobytes()
+            
+            parts = [
+                types.Part(text=prompt),
+                types.Part(
+                    inline_data=types.Blob(
+                        data=encoded_image.tobytes(),
+                        mime_type="image/png"
+                    )
+                )
+            ]
+
+            # 캐릭터 이미지가 있으면 추가
+            if character_image_bgr is not None:
+                success_char, encoded_char = cv2.imencode(".png", character_image_bgr)
+                if success_char:
+                    parts.append(
+                        types.Part(
+                            inline_data=types.Blob(
+                                data=encoded_char.tobytes(),
+                                mime_type="image/png"
+                            )
+                        )
+                    )
+                else:
+                    print(f"[{style_name}] [경고] 캐릭터 이미지 인코딩 실패, 메인 이미지만 사용합니다.")
 
             # 2. Gemini 클라이언트 설정
             client = genai.Client(api_key=api_key)
@@ -46,20 +88,7 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
             # 3. Gemini API 호출
             response = client.models.generate_content(
                 model=MODEL_ID,
-                contents=[
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part(text=prompt),
-                            types.Part(
-                                inline_data=types.Blob(
-                                    data=image_bytes,
-                                    mime_type="image/png"
-                                )
-                            )
-                        ]
-                    )
-                ],
+                contents=[types.Content(role="user", parts=parts)],
                 config=types.GenerateContentConfig(
                     response_modalities=["IMAGE", "TEXT"]
                 )
@@ -101,3 +130,4 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
             else:
                 print(f"   [{style_name}] [최종 실패] 모든 재시도 횟수를 초과했습니다.")
                 return None
+    return None
