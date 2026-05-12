@@ -261,7 +261,8 @@ class BasicUserGui(QMainWindow):
         self.worker = WorkerThread(
             self.processor, self.captured_image, sketch_type,
             gemini_api_key=self.api_key, gemini_prompt=prompt, 
-            character_image=character_image, pen_config=self.default_pen
+            character_image=character_image, pen_config=self.default_pen,
+            temperature=0.0
         )
         self.worker.progress_signal.connect(self.on_worker_progress)
         self.worker.finished_signal.connect(self.on_worker_finished)

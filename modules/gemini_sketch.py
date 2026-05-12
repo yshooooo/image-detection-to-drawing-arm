@@ -8,7 +8,7 @@ from google.genai import types
 # --- Gemini API 설정 ---
 MODEL_ID = "gemini-3.1-flash-image-preview"
 
-def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: str = None, style_name: str = "Gemini", character_image_bgr: np.ndarray = None) -> np.ndarray:
+def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: str = None, style_name: str = "Gemini", character_image_bgr: np.ndarray = None, temperature: float = 0.0) -> np.ndarray:
     """
     OpenCV 이미지를 입력받아 Gemini API를 사용하여 세선화에 최적화된 고품질 선화를 생성합니다.
     서버 과부하(503 등) 발생 시 자동으로 재시도하며 실행 시간을 측정합니다.
@@ -90,7 +90,9 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
                 model=MODEL_ID,
                 contents=[types.Content(role="user", parts=parts)],
                 config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE", "TEXT"]
+                    response_modalities=["IMAGE", "TEXT"],
+                    temperature=temperature,
+                    top_k=1,
                 )
             )
 

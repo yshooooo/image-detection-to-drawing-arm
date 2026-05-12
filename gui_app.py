@@ -7,7 +7,7 @@ import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QGridLayout, QLabel, QComboBox, QPushButton, 
                              QGroupBox, QFileDialog, QMessageBox, QScrollArea,
-                             QLineEdit, QProgressBar)
+                             QLineEdit, QProgressBar, QSlider)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 
@@ -148,7 +148,7 @@ class WorkerThread(QThread):
     error_signal = pyqtSignal(str) # 에러 메시지 전용 시그널 추가
 
     def __init__(self, processor, image, sketch_type, gemini_api_key=None, 
-                 gemini_prompt=None, character_image=None, pen_config=None):
+                 gemini_prompt=None, character_image=None, pen_config=None, temperature=0.0):
         super().__init__()
         self.processor = processor
         self.image = image
@@ -157,13 +157,16 @@ class WorkerThread(QThread):
         self.gemini_prompt = gemini_prompt
         self.character_image = character_image
         self.pen_config = pen_config
+        self.temperature = temperature
+        self.temperature = temperature
 
     def run(self):
         try:
             results = self.processor.process(
                 self.image, self.sketch_type, self.gemini_api_key, 
                 self.gemini_prompt, self.character_image, self.pen_config,
-                progress_callback=self.emit_progress
+                progress_callback=self.emit_progress,
+                temperature=self.temperature
             )
             self.finished_signal.emit(results if results else [])
         except Exception as e:
@@ -318,6 +321,21 @@ class SketchGui(QMainWindow):
         self.edit_api_key.setText("AIzaSyAAepYJsbdwtrVseJe3pqf0hKfvRz_yk1w") # 여기에 실제 API 키 입력
         self.edit_api_key.setPlaceholderText("API 키가 하드코딩됨")
         right_layout.addWidget(self.edit_api_key)
+
+        # Temperature (일관성/창의성) 조절
+        temp_layout = QHBoxLayout()
+        temp_layout.addWidget(QLabel("일관성 ↔ 창의성:"))
+        self.lbl_temp_val = QLabel("0.0")
+        temp_layout.addStretch()
+        temp_layout.addWidget(self.lbl_temp_val)
+        right_layout.addLayout(temp_layout)
+        
+        self.slider_temp = QSlider(Qt.Orientation.Horizontal)
+        self.slider_temp.setRange(0, 20) # 0.0 ~ 2.0 (Step 0.1)
+        self.slider_temp.setValue(0)
+        self.slider_temp.setTickInterval(1)
+        self.slider_temp.valueChanged.connect(lambda v: self.lbl_temp_val.setText(f"{v/10:.1f}"))
+        right_layout.addWidget(self.slider_temp)
 
         right_layout.addStretch()
 
@@ -591,6 +609,7 @@ class SketchGui(QMainWindow):
         pen_name = self.combo_pen.currentText()
         pen_config = config.PEN_PRESETS[pen_name]
         api_key = self.edit_api_key.text()
+        temperature = self.slider_temp.value() / 10.0 # 슬라이더 값을 온도로 변환 (0.0 ~ 2.0)
         
         if style_text == "캐릭터 동반 모드":
             sketch_type = 'GEMINI_CHAR'
@@ -619,7 +638,8 @@ class SketchGui(QMainWindow):
         self.worker = WorkerThread(
             self.processor, self.captured_image, sketch_type, 
             gemini_api_key=api_key, gemini_prompt=prompt, 
-            character_image=self.character_image, pen_config=pen_config
+            character_image=self.character_image, pen_config=pen_config,
+            temperature=temperature
         )
         self.worker.progress_signal.connect(self.on_worker_progress)
         self.worker.finished_signal.connect(self.on_worker_finished)
