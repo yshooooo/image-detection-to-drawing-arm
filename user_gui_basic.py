@@ -63,7 +63,7 @@ class WorkerThread(QThread):
     error_signal = pyqtSignal(str)
 
     def __init__(self, processor, image, sketch_type, gemini_api_key=None, 
-                 gemini_prompt=None, character_image=None, pen_config=None):
+                 gemini_prompt=None, character_image=None, pen_config=None, temperature=0.0):
         super().__init__()
         self.processor = processor
         self.image = image
@@ -72,13 +72,15 @@ class WorkerThread(QThread):
         self.gemini_prompt = gemini_prompt
         self.character_image = character_image
         self.pen_config = pen_config
+        self.temperature = temperature
 
     def run(self):
         try:
             results = self.processor.process(
                 self.image, self.sketch_type, self.gemini_api_key, 
                 self.gemini_prompt, self.character_image, self.pen_config,
-                progress_callback=self.emit_progress
+                progress_callback=self.emit_progress,
+                temperature=self.temperature
             )
             self.finished_signal.emit(results if results else [])
         except Exception as e:

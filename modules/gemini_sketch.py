@@ -11,8 +11,6 @@ MODEL_ID = "gemini-3.1-flash-image-preview"
 def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: str = None, style_name: str = "Gemini", character_image_bgr: np.ndarray = None, temperature: float = 0.0) -> np.ndarray:
     """
     OpenCV 이미지를 입력받아 Gemini API를 사용하여 세선화에 최적화된 고품질 선화를 생성합니다.
-    서버 과부하(503 등) 발생 시 자동으로 재시도하며 실행 시간을 측정합니다.
-    character_image_bgr이 제공되면 두 이미지를 합성하여 그립니다.
     """
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY")
@@ -21,25 +19,45 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
         print(f"\n[{style_name}] [오류] GEMINI_API_KEY가 설정되지 않았습니다.")
         return None
 
+    # --- 1. 입력 이미지 전처리 (정규화) ---
+    # CLAHE(Contrast Limited Adaptive Histogram Equalization)를 적용하여 조명 편차를 줄입니다.
+    lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    cl = clahe.apply(l)
+    limg = cv2.merge((cl,a,b))
+    processed_image = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+
+    # --- 2. 시스템 인스트럭션 및 프롬프트 설정 ---
+    system_instruction = (
+        "You are an expert line art illustrator specializing in minimalist vector art for pen plotters. "
+        "Your absolute priority is to create drawings composed ONLY of solid black lines on a pure white background. "
+        "RULES: "
+        "1. NO shading, NO gradients, NO colors, NO gray areas. "
+        "2. All lines must have a CONSISTENT thickness (monoline). "
+        "3. Focus on essential contours and clear shapes. "
+        "4. Avoid fine details like skin wrinkles, small shadows, or complex textures. "
+        "5. Lines must be clean and continuous for robotic tracing."
+    )
+
     if not prompt:
         if character_image_bgr is not None:
             prompt = (
-                "Combine the person from the first image and the character from the second image into a single, cohesive scene. "
-                "Draw them interacting or standing together naturally. "
-                "Render the entire drawing as a high-quality, pure black line art caricature. "
-                "The entire drawing must be rendered exclusively with lines of exactly the same thickness (uniform line weight, minimal width) using only solid black ink. "
-                "Only solid black lines on a clean white background. No filling, shading, or gradients. "
-                "The lines should be precise and appear machine-drawn for direct path tracing."
+                "Combine the person and the character into a single cohesive line art scene. "
+                "Draw them interacting naturally. "
+                "Ensure NO facial wrinkles or aging lines are drawn on the person. "
+                "The eyes must be clean outlines. NO solid black fills unless it's a very small dot for the pupil. "
+                "The result must be a high-quality, pure black monoline drawing on a white background."
             )
         else:
             prompt = (
-                "A high-quality, pure black line art caricature based on the provided image. "
-                "The entire drawing is rendered exclusively with lines of exactly the same thickness "
-                "(uniform line weight, minimal width) using only solid black ink. "
-                "The lines are precise, unwavering, and appear machine-drawn for direct path tracing. "
-                "Only solid black lines on a clean white background. "
-                "No other colors, gradients, shading, or textures are present. "
-                "Minimalist geometric details. Focus purely on the continuity of the lines and the main simplified shape."
+                "A minimalist, high-quality black line art caricature based on the provided image. "
+                "Render the person with smooth, clean lines. "
+                "ABSOLUTELY NO shading, hatching, or textures. "
+                "DO NOT draw any wrinkles, smile lines, or fine facial details. "
+                "The eyes should be represented as clear, open outlines. "
+                "The hair should be simplified into a few smooth, sweeping paths. "
+                "The result must be optimized for a robotic arm drawing with a single pen."
             )
 
     print(f">> [{style_name}] Gemini API({MODEL_ID})를 사용하여 선화 추출을 시작합니다.")
@@ -51,8 +69,8 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
     for attempt in range(1, max_retries + 1):
         start_time = time.time()
         try:
-            # 1. OpenCV 이미지(BGR)를 PNG 바이트로 인코딩
-            success, encoded_image = cv2.imencode(".png", image_bgr)
+            # OpenCV 이미지(BGR)를 PNG 바이트로 인코딩
+            success, encoded_image = cv2.imencode(".png", processed_image)
             if not success:
                 print(f"[{style_name}] [오류] 메인 이미지 인코딩에 실패했습니다.")
                 return None
@@ -67,32 +85,24 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
                 )
             ]
 
-            # 캐릭터 이미지가 있으면 추가
             if character_image_bgr is not None:
                 success_char, encoded_char = cv2.imencode(".png", character_image_bgr)
                 if success_char:
-                    parts.append(
-                        types.Part(
-                            inline_data=types.Blob(
-                                data=encoded_char.tobytes(),
-                                mime_type="image/png"
-                            )
-                        )
-                    )
-                else:
-                    print(f"[{style_name}] [경고] 캐릭터 이미지 인코딩 실패, 메인 이미지만 사용합니다.")
+                    parts.append(types.Part(inline_data=types.Blob(data=encoded_char.tobytes(), mime_type="image/png")))
 
-            # 2. Gemini 클라이언트 설정
+            # Gemini 클라이언트 설정
             client = genai.Client(api_key=api_key)
 
-            # 3. Gemini API 호출
+            # Gemini API 호출 (System Instruction 및 Seed 추가)
             response = client.models.generate_content(
                 model=MODEL_ID,
                 contents=[types.Content(role="user", parts=parts)],
                 config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE", "TEXT"],
+                    system_instruction=system_instruction,
+                    response_modalities=["IMAGE"],
                     temperature=temperature,
                     top_k=1,
+                    seed=42, # 일관성을 위한 시드 고정
                 )
             )
 
