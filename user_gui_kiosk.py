@@ -141,10 +141,10 @@ class KioskUserGui(QMainWindow):
     def load_character_files(self):
         if not os.path.exists(config.CHARACTERS_DIR):
             return []
-        return [
+        return sorted([
             f for f in os.listdir(config.CHARACTERS_DIR)
             if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-        ]
+        ])
 
     def init_ui(self):
         self.central_widget = QWidget()
@@ -304,7 +304,10 @@ class KioskUserGui(QMainWindow):
             btn.clicked.connect(lambda checked, p=prompt, n=name: self.select_portrait_prompt(p, n))
             self.portrait_grid.addWidget(btn, i // 2, i % 2)
             
-        right_layout.addWidget(self.portrait_btn_group)
+        portrait_scroll = QScrollArea()
+        portrait_scroll.setWidgetResizable(True)
+        portrait_scroll.setWidget(self.portrait_btn_group)
+        right_layout.addWidget(portrait_scroll)
         right_layout.addStretch()
         
         self.btn_start_portrait = QPushButton("생성 시작")
@@ -475,16 +478,31 @@ class KioskUserGui(QMainWindow):
         return safe.strip('._') or 'character'
 
     def portrait_preview_path(self, prompt_name):
+        candidates = [
+            os.path.join(self.preview_dir, f"portrait_{self.safe_filename_part(prompt_name)}.png")
+        ]
         filename = self.portrait_preview_files.get(prompt_name)
-        return os.path.join(self.preview_dir, filename) if filename else None
+        if filename:
+            candidates.append(os.path.join(self.preview_dir, filename))
+        return self.first_existing_path(candidates)
 
     def character_preview_path(self, character_filename, prompt_name):
         action_idx = self.char_action_indices.get(prompt_name)
-        if not character_filename or action_idx is None:
+        if not character_filename or not prompt_name:
             return None
         character_name = self.safe_filename_part(character_filename)
-        filename = f"character_{character_name}_action_{action_idx}.png"
-        return os.path.join(self.preview_dir, filename)
+        candidates = [
+            os.path.join(self.preview_dir, f"character_{character_name}_action_{self.safe_filename_part(prompt_name)}.png")
+        ]
+        if action_idx is not None:
+            candidates.append(os.path.join(self.preview_dir, f"character_{character_name}_action_{action_idx}.png"))
+        return self.first_existing_path(candidates)
+
+    def first_existing_path(self, paths):
+        for path in paths:
+            if path and os.path.exists(path):
+                return path
+        return paths[0] if paths else None
 
     def show_preview_file(self, label_widget, image_path, missing_message=None):
         label_widget.clear()
@@ -667,6 +685,11 @@ class KioskUserGui(QMainWindow):
         char_path = os.path.join(config.CHARACTERS_DIR, filename)
         img_array = np.fromfile(char_path, np.uint8)
         self.selected_char_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if self.selected_char_img is None:
+            QMessageBox.warning(self, "캐릭터 오류", f"캐릭터 이미지를 읽을 수 없습니다.\n{char_path}")
+            self.selected_char_filename = None
+            self.btn_start_char.setEnabled(False)
+            return
         self.refresh_character_preview()
         if self.selected_prompt:
             self.btn_start_char.setEnabled(True)
@@ -679,6 +702,16 @@ class KioskUserGui(QMainWindow):
             self.btn_start_char.setEnabled(True)
 
     def start_generation(self):
+        if self.captured_image is None:
+            QMessageBox.warning(self, "이미지 오류", "촬영된 사진이 없습니다.")
+            return
+        if not self.selected_prompt:
+            QMessageBox.warning(self, "선택 오류", "스타일 또는 동작을 선택해 주세요.")
+            return
+        if self.selected_sketch_type == "GEMINI_CHAR" and self.selected_char_img is None:
+            QMessageBox.warning(self, "선택 오류", "캐릭터를 선택해 주세요.")
+            return
+
         # Prepare result page
         self.stack.setCurrentWidget(self.page_result)
         QApplication.processEvents()
