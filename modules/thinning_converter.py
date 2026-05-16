@@ -11,6 +11,47 @@ from .config import (
     TARGET_DRAW_HEIGHT_MM,
 )
 
+def _dist_sq(p1, p2) -> float:
+    dx = p1[0] - p2[0]
+    dy = p1[1] - p2[1]
+    return dx * dx + dy * dy
+
+def optimize_path_order(paths):
+    if len(paths) <= 1:
+        return paths
+
+    remaining = [list(path) for path in paths if path]
+    ordered = []
+    current = (0.0, 0.0)
+
+    while remaining:
+        best_idx = 0
+        best_reverse = False
+        best_dist = float("inf")
+
+        for idx, path in enumerate(remaining):
+            start_dist = _dist_sq(current, path[0])
+            end_dist = _dist_sq(current, path[-1])
+
+            if start_dist < best_dist:
+                best_idx = idx
+                best_reverse = False
+                best_dist = start_dist
+
+            if end_dist < best_dist:
+                best_idx = idx
+                best_reverse = True
+                best_dist = end_dist
+
+        path = remaining.pop(best_idx)
+        if best_reverse:
+            path = list(reversed(path))
+
+        ordered.append(path)
+        current = path[-1]
+
+    return ordered
+
 def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_filepath: str) -> bool:
     """
     이미 이진화된 이미지를 입력받아 세선화(Thinning)하고, 
@@ -79,6 +120,8 @@ def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_file
                         paths.append([(float(p[0]), float(p[1])) for p in path_np])
 
     # 4. SVG 및 G-코드 생성
+    paths = optimize_path_order(paths)
+
     os.makedirs(os.path.dirname(svg_filepath), exist_ok=True)
     os.makedirs(os.path.dirname(nc_filepath), exist_ok=True)
     
