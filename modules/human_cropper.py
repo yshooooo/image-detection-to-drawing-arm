@@ -92,7 +92,18 @@ def _to_mp_image(image: np.ndarray) -> mp.Image:
     OpenCV BGR numpy 배열을 MediaPipe Image 로 변환합니다.
     신버전 Tasks API 는 mp.Image 만 입력으로 받습니다.
     """
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    if image.ndim == 2:
+        rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    else:
+        channels = image.shape[2]
+        if channels == 1:
+            rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif channels == 3:
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        elif channels == 4:
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        else:
+            raise ValueError(f"Unsupported image channel count: {channels}")
     return mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
 

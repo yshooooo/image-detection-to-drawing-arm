@@ -19,10 +19,16 @@ def generate_sketch(image_bgr: np.ndarray) -> np.ndarray:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # 1. 이미지 전처리
-    if len(image_bgr.shape) == 3:
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    else:
+    if image_bgr.ndim == 2:
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_GRAY2RGB)
+    elif image_bgr.shape[2] == 1:
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_GRAY2RGB)
+    elif image_bgr.shape[2] == 3:
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    elif image_bgr.shape[2] == 4:
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGRA2RGB)
+    else:
+        raise ValueError(f"Unsupported image channel count: {image_bgr.shape[2]}")
     
     h, w = image_rgb.shape[:2]
     max_size = 1024

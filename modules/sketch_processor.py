@@ -125,8 +125,16 @@ class SketchProcessor:
         cv2.imencode(".png", sketch)[1].tofile(os.path.join(intermediate_dir, f"{output_base}.png"))
 
         # 4. G-Code 생성
-        if len(sketch.shape) == 3:
-            sketch = cv2.cvtColor(sketch, cv2.COLOR_BGR2GRAY)
+        if sketch.ndim == 3:
+            channels = sketch.shape[2]
+            if channels == 1:
+                sketch = sketch[:, :, 0]
+            elif channels == 3:
+                sketch = cv2.cvtColor(sketch, cv2.COLOR_BGR2GRAY)
+            elif channels == 4:
+                sketch = cv2.cvtColor(sketch, cv2.COLOR_BGRA2GRAY)
+            else:
+                raise ValueError(f"Unsupported sketch channel count: {channels}")
         _, binary = cv2.threshold(sketch, threshold_val, 255, cv2.THRESH_BINARY)
         
         nc_path = os.path.join(output_dir, f"{output_base}.nc")

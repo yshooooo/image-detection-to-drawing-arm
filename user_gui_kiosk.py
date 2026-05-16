@@ -3,6 +3,7 @@ import os
 import cv2
 import numpy as np
 import time
+import traceback
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QProgressBar, 
                              QMessageBox, QFrame, QGridLayout, QSizePolicy,
@@ -87,7 +88,7 @@ class WorkerThread(QThread):
             )
             self.finished_signal.emit(results if results else [])
         except Exception as e:
-            self.error_signal.emit(str(e))
+            self.error_signal.emit(f"{e}\n\n{traceback.format_exc()}")
     def emit_progress(self, step_id, image, message):
         img = image if image is not None else np.array([], dtype=np.uint8)
         self.progress_signal.emit(step_id, img, message)
@@ -392,35 +393,52 @@ class KioskUserGui(QMainWindow):
     def create_page_result(self):
         page = QWidget()
         layout = QHBoxLayout(page)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(24)
         
         # Left: Original
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.addWidget(QLabel("원본 사진"))
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_title = QLabel("원본 사진")
+        left_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        left_title.setStyleSheet("font-size: 22px; font-weight: bold;")
+        left_layout.addWidget(left_title)
         self.result_orig_label = QLabel()
         self.result_orig_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.result_orig_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.result_orig_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.result_orig_label.setMinimumSize(400, 500)
+        self.result_orig_label.setStyleSheet("border: 5px solid #4CAF50; background-color: #1e1e1e;")
         left_layout.addWidget(self.result_orig_label, stretch=1)
-        layout.addWidget(left_widget)
+        layout.addWidget(left_widget, stretch=1)
+        
+        self.result_arrow_label = QLabel("→")
+        self.result_arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.result_arrow_label.setFixedWidth(80)
+        self.result_arrow_label.setStyleSheet("font-size: 64px; font-weight: bold; color: white;")
+        layout.addWidget(self.result_arrow_label)
         
         # Right: Result
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         self.result_title = QLabel("AI가 그림을 그리고 있습니다...")
+        self.result_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.result_title.setStyleSheet("font-size: 25px; font-weight: bold;")
         right_layout.addWidget(self.result_title)
         
         self.result_img_label = QLabel()
         self.result_img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.result_img_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.result_img_label.setStyleSheet("border: 5px solid #2196F3;")
+        self.result_img_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.result_img_label.setMinimumSize(400, 500)
+        self.result_img_label.setStyleSheet("border: 5px solid #2196F3; background-color: #1e1e1e;")
         right_layout.addWidget(self.result_img_label, stretch=1)
         
         self.result_progress = QProgressBar()
         self.result_progress.setFixedHeight(30)
         right_layout.addWidget(self.result_progress)
         
-        layout.addWidget(right_widget)
+        layout.addWidget(right_widget, stretch=1)
         return page
 
     def frame_to_rgb(self, image):
@@ -662,12 +680,14 @@ class KioskUserGui(QMainWindow):
 
     def start_generation(self):
         # Prepare result page
+        self.stack.setCurrentWidget(self.page_result)
+        QApplication.processEvents()
+
         pixmap = self.frame_to_pixmap(self.captured_image)
         
         target_size = self.result_orig_label.size()
-        if target_size.width() < 100:
-            target_size = self.stack.size()
-            target_size.setWidth(max(1, target_size.width() // 2))
+        if target_size.width() < 100 or target_size.height() < 100:
+            target_size = self.result_orig_label.minimumSize()
         
         self.result_orig_label.setPixmap(pixmap.scaled(
             target_size, 
@@ -678,8 +698,6 @@ class KioskUserGui(QMainWindow):
         self.result_title.setText("AI가 그림을 그리고 있습니다...")
         self.result_progress.setRange(0, 0)
         self.result_img_label.clear()
-        
-        self.stack.setCurrentWidget(self.page_result)
         
         if not self.api_key:
             QMessageBox.critical(self, "오류", "API Key가 없습니다.")
@@ -702,9 +720,8 @@ class KioskUserGui(QMainWindow):
             base_pixmap = self.frame_to_pixmap(image)
             
             target_size = self.result_img_label.size()
-            if target_size.width() < 100:
-                target_size = self.stack.size()
-                target_size.setWidth(max(1, target_size.width() // 2))
+            if target_size.width() < 100 or target_size.height() < 100:
+                target_size = self.result_img_label.minimumSize()
             
             pixmap = base_pixmap.scaled(
                 target_size, 

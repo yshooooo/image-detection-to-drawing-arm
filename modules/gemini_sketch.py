@@ -8,6 +8,23 @@ from google.genai import types
 # --- Gemini API 설정 ---
 MODEL_ID = "gemini-3.1-flash-image-preview"
 
+def _to_bgr(image: np.ndarray):
+    if image is None or image.size == 0:
+        return None
+
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+    channels = image.shape[2]
+    if channels == 1:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if channels == 3:
+        return image
+    if channels == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+    raise ValueError(f"Unsupported image channel count: {channels}")
+
 def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: str = None, style_name: str = "Gemini", character_image_bgr: np.ndarray = None, temperature: float = 0.0) -> np.ndarray:
     """
     OpenCV 이미지를 입력받아 Gemini API를 사용하여 세선화에 최적화된 고품질 선화를 생성합니다.
@@ -21,6 +38,11 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
 
     # --- 1. 입력 이미지 전처리 (정규화) ---
     # CLAHE(Contrast Limited Adaptive Histogram Equalization)를 적용하여 조명 편차를 줄입니다.
+    image_bgr = _to_bgr(image_bgr)
+    character_image_bgr = _to_bgr(character_image_bgr) if character_image_bgr is not None else None
+    if image_bgr is None:
+        return None
+
     lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
@@ -126,8 +148,16 @@ def generate_gemini_sketch(image_bgr: np.ndarray, api_key: str = None, prompt: s
             # INTER_CUBIC은 LANCZOS4보다 부드러운 결과를 보여 계단 현상을 완화합니다.
             final_sketch = cv2.resize(result_sketch, (w, h), interpolation=cv2.INTER_CUBIC)
             
-            if len(final_sketch.shape) == 3:
-                final_sketch = cv2.cvtColor(final_sketch, cv2.COLOR_BGR2GRAY)
+            if final_sketch.ndim == 3:
+                channels = final_sketch.shape[2]
+                if channels == 1:
+                    final_sketch = final_sketch[:, :, 0]
+                elif channels == 3:
+                    final_sketch = cv2.cvtColor(final_sketch, cv2.COLOR_BGR2GRAY)
+                elif channels == 4:
+                    final_sketch = cv2.cvtColor(final_sketch, cv2.COLOR_BGRA2GRAY)
+                else:
+                    raise ValueError(f"Unsupported sketch channel count: {channels}")
 
             print(f"   [{style_name}] >> 생성 성공! (소요 시간: {elapsed_time:.2f}초)")
             return final_sketch

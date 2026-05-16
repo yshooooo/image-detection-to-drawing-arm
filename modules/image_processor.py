@@ -7,6 +7,23 @@ import os
 # ONNX Runtime의 불필요한 로그(에러 메시지)를 줄이기 위한 환경 변수 설정
 os.environ["ORT_LOGGING_LEVEL"] = "3" 
 
+def _to_rgb(image: np.ndarray):
+    if image is None or image.size == 0:
+        return None
+
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+
+    channels = image.shape[2]
+    if channels == 1:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    if channels == 3:
+        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    if channels == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+
+    raise ValueError(f"Unsupported image channel count: {channels}")
+
 def image_processor(image_bgr: np.ndarray):
     """
     이미지(OpenCV)를 입력받아 배경을 제거하고 부드럽게(Blur) 만듭니다.
@@ -15,7 +32,9 @@ def image_processor(image_bgr: np.ndarray):
     
     try:
         # 1. PIL 포맷으로 변환 (BGR -> RGB)
-        rgb_image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        rgb_image = _to_rgb(image_bgr)
+        if rgb_image is None:
+            return None
         input_img_pil = Image.fromarray(rgb_image)
         
         # [추가] 이미지 크기 조정 (가로 최대 1024px로 제한)
@@ -36,13 +55,17 @@ def image_processor(image_bgr: np.ndarray):
         img_np = np.array(output_img_pil)
         
         # 투명한 배경(RGBA)을 흰색(RGB)으로 변경
-        if img_np.shape[2] == 4:
+        if img_np.ndim == 2:
+            img_rgb = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+        elif img_np.shape[2] == 4:
             alpha = img_np[:, :, 3]
             img_rgb = img_np[:, :, :3]
             bg = np.ones_like(img_rgb, dtype=np.uint8) * 255
             alpha_factor = alpha[:, :, np.newaxis] / 255.0
             # RGB 이미지에 알파 채널을 곱하고, 흰색 배경에 (1-알파)를 곱하여 더합니다.
             img_rgb = (img_rgb * alpha_factor + bg * (1 - alpha_factor)).astype(np.uint8)
+        elif img_np.shape[2] == 1:
+            img_rgb = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
         else:
             img_rgb = img_np
             
