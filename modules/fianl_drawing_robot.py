@@ -445,7 +445,7 @@ def main(args=None):
     pen_rpy = (0.0, 180.0, 90.0)
     # movel(posx(cx, cy, cz + lift, *pen_rpy), vel=50, acc=50)
 
-    cz = -24.5 # 볼펜
+    cz = -24 # 볼펜
     # cz = -2.7 # 네임펜
     # cz = 4.5 # 마카
 
