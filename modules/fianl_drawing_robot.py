@@ -28,6 +28,9 @@ RAW_COORD_SCALE = 1.0
 TARGET_DRAW_WIDTH_MM = 100.0
 TARGET_DRAW_HEIGHT_MM = 100.0
 SELECTED_PEN = "pen"
+BASE_TCP_NAME = "Tool_v1"
+MIN_POINT_DISTANCE_MM = 0.5
+RDP_EPSILON_MM = 0.3
 
 PEN_TCP_MAP = {
     "pen": "pen",
@@ -42,19 +45,30 @@ PEN_TCP_MAP = {
     "마카": "maka",
 }
 
+# 펜 타입(내부 키) -> 티칭펜던트에 등록된 실제 TCP 이름
+# 환경에 맞게 필요 시 값만 바꿔서 사용
+DRAW_TCP_NAME_MAP = {
+    "pen": "pen",
+    "name": "name",
+    "maka": "maka",
+}
+
 PEN_PICK_CONFIG = {
     "pen": {
-        "pick_pos": (89.10, 3.55, -76.70, -13.07, -89.77, 77.07),
+        "pick_pos_a": (4.49, 43.69, -100.75, 25.60, -37.62, -23.92),
+        "pick_pos_b": (85.61, -8.49, -60.60, 0.13, -110.91, 85.50),
         "pick_pose_down": (-81.69, -402.49, 366.76, 0, 180, 0),
         "pick_pose_up": (-81.69, -402.49, 566.76, 0, 180, 0),
     },
     "name": {
-        "pick_pos": (89.10, 3.55, -76.70, -13.07, -89.77, 77.07),
+        "pick_pos_a": (4.49, 43.69, -100.75, 25.60, -37.62, -23.92),
+        "pick_pos_b": (85.61, -8.49, -60.60, 0.13, -110.91, 85.50),
         "pick_pose_down": (-31.69, -402.49, 366.76, 0, 180, 0),
         "pick_pose_up": (-31.69, -402.49, 566.76, 0, 180, 0),
     },
     "maka": {
-        "pick_pos": (89.10, 3.55, -76.70, -13.07, -89.77, 77.07),
+        "pick_pos_a": (4.49, 43.69, -100.75, 25.60, -37.62, -23.92),
+        "pick_pos_b": (85.61, -8.49, -60.60, 0.13, -110.91, 85.50),
         "pick_pose_down": (17.69, -404.49, 366.76, 0, 180, 0) ,
         "pick_pose_up": (17.69, -404.49, 566.76, 0, 180, 0),
     },
@@ -92,14 +106,88 @@ def compress_path(points, tolerance=1e-4):
     return compressed
 
 
-def gcode_to_dsr_function(input_nc, output_py):
+def point_distance_xy(point1, point2):
+    return math.hypot(point2[0] - point1[0], point2[1] - point1[1])
+
+
+def remove_close_points(points, min_dist=MIN_POINT_DISTANCE_MM):
+    if len(points) < 3:
+        return points[:]
+
+    filtered = [points[0]]
+
+    for point in points[1:-1]:
+        if point_distance_xy(filtered[-1], point) >= min_dist:
+            filtered.append(point)
+
+    if filtered[-1] != points[-1]:
+        filtered.append(points[-1])
+
+    return filtered
+
+
+def perpendicular_distance(point, start, end):
+    x0, y0, _ = point
+    x1, y1, _ = start
+    x2, y2, _ = end
+
+    dx = x2 - x1
+    dy = y2 - y1
+    line_length = math.hypot(dx, dy)
+
+    if line_length <= 1e-9:
+        return math.hypot(x0 - x1, y0 - y1)
+
+    return abs(dy * x0 - dx * y0 + x2 * y1 - y2 * x1) / line_length
+
+
+def rdp_simplify(points, epsilon=RDP_EPSILON_MM):
+    if len(points) < 3:
+        return points[:]
+
+    start = points[0]
+    end = points[-1]
+    max_distance = -1.0
+    split_index = -1
+
+    for index in range(1, len(points) - 1):
+        distance = perpendicular_distance(points[index], start, end)
+        if distance > max_distance:
+            max_distance = distance
+            split_index = index
+
+    if max_distance > epsilon:
+        left = rdp_simplify(points[: split_index + 1], epsilon)
+        right = rdp_simplify(points[split_index:], epsilon)
+        return left[:-1] + right
+
+    return [start, end]
+
+
+def simplify_stroke(points):
+    if len(points) < 3:
+        return points[:]
+
+    reduced_points = remove_close_points(points, MIN_POINT_DISTANCE_MM)
+    return rdp_simplify(reduced_points, RDP_EPSILON_MM)
+
+
+def build_motion_sequence(lines):
     current_x = 0.0
     current_y = 0.0
     current_z = 0.0
-    points = []
+    motions = []
+    stroke_points = []
 
-    with open(input_nc, "r", encoding="utf-8") as file:
-        lines = file.readlines()
+    def flush_stroke():
+        nonlocal stroke_points
+        if not stroke_points:
+            return
+
+        for point in simplify_stroke(stroke_points):
+            motions.append(("G1", point))
+
+        stroke_points = []
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -118,10 +206,50 @@ def gcode_to_dsr_function(input_nc, output_py):
         if z_match:
             current_z = float(z_match.group(1))
 
-        points.append((current_x * RAW_COORD_SCALE, current_y * RAW_COORD_SCALE, current_z))
+        point = (current_x * RAW_COORD_SCALE, current_y * RAW_COORD_SCALE, current_z)
 
-    print(f"원래 점 개수: {len(points)}")
-    points = compress_path(points)
+        if line.startswith("G0"):
+            flush_stroke()
+            motions.append(("G0", point))
+        else:
+            stroke_points.append(point)
+
+    flush_stroke()
+    return motions
+
+
+def gcode_to_dsr_function(input_nc, output_py):
+    with open(input_nc, "r", encoding="utf-8") as file:
+        lines = file.readlines()
+
+    current_x = 0.0
+    current_y = 0.0
+    current_z = 0.0
+    raw_points = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+
+        if not (line.startswith("G0") or line.startswith("G1")):
+            continue
+
+        x_match = re.search(r"X([-+]?\d*\.?\d+)", line)
+        y_match = re.search(r"Y([-+]?\d*\.?\d+)", line)
+        z_match = re.search(r"Z([-+]?\d*\.?\d+)", line)
+
+        if x_match:
+            current_x = float(x_match.group(1))
+        if y_match:
+            current_y = float(y_match.group(1))
+        if z_match:
+            current_z = float(z_match.group(1))
+
+        raw_points.append((current_x * RAW_COORD_SCALE, current_y * RAW_COORD_SCALE, current_z))
+
+    motions = build_motion_sequence(lines)
+    points = [point for _, point in motions]
+
+    print(f"원래 점 개수: {len(raw_points)}")
     print(f"압축 후 점 개수: {len(points)}")
 
     if not points:
@@ -164,10 +292,10 @@ def gcode_to_dsr_function(input_nc, output_py):
     output.append("    return Y_Z_TOTAL_OFFSET * ratio\n\n")
     output.append("def draw(cx, cy, cz):\n")
     output.append("    PEN_RPY = (0.0, 180.0, 90.0)\n")
-    output.append("    vel = 80\n")
-    output.append("    acc = 80\n\n")
+    output.append("    vel = 100\n")
+    output.append("    acc = 100\n\n")
 
-    for x, y, z in points:
+    for _, (x, y, z) in motions:
         output.append(f"    dx = {x:.3f}\n")
         output.append(f"    dy = {y:.3f}\n")
         output.append(f"    base_z = {z:.3f}\n")
@@ -215,6 +343,7 @@ def main(args=None):
             get_current_posx,
             get_tcp,
             movej,
+            movesj,
             movel,
             posj,
             posx,
@@ -235,6 +364,7 @@ def main(args=None):
             f"가능한 값: {valid_names}"
         )
     selected_pick = PEN_PICK_CONFIG[selected_tcp]
+    requested_tcp_name = DRAW_TCP_NAME_MAP.get(selected_tcp, selected_tcp)
 
     def open_gripper():
         print("그리퍼 열기 시도...")
@@ -254,62 +384,70 @@ def main(args=None):
         set_tool_digital_output(2, 0)
         time.sleep(1)
 
+    def _normalize_tcp_name(name):
+        return str(name).strip().lower()
+
+    def set_tcp_with_verify(target_tcp, retries=2):
+        for attempt in range(retries + 1):
+            set_robot_mode(0)
+            time.sleep(0.5)
+            set_tcp(target_tcp)
+            time.sleep(0.5)
+            set_robot_mode(1)
+            time.sleep(0.5)
+
+            current_tcp = get_tcp()
+            logger.info(
+                f"TCP 요청='{target_tcp}', 현재='{current_tcp}', 시도={attempt + 1}/{retries + 1}"
+            )
+            if _normalize_tcp_name(current_tcp) == _normalize_tcp_name(target_tcp):
+                return current_tcp
+        raise RuntimeError(
+            f"TCP 변경 실패: requested='{target_tcp}', current='{current_tcp}'. "
+            "티칭펜던트 TCP 이름(대소문자/철자)을 확인하세요."
+        )
+
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
     p1 = posj(0, 0, 0, 0, 0, 0)
 
     camera_pos = posj(-90.19, -9.74, -132.50, -2.28, 54.36, 2.15) #joint
 
-    pick_pos = posj(*selected_pick["pick_pos"])
+    pick_pos_a = posj(*selected_pick["pick_pos_a"])
+    pick_pos_b = posj(*selected_pick["pick_pos_b"])
     pick_pose_down = posx(*selected_pick["pick_pose_down"])
     pick_pose_up = posx(*selected_pick["pick_pose_up"])
 
     gcode_to_dsr_function(input_nc_path, OUTPUT_PY)
 
     print("\n=== 1. 펜 집기 작업 시작 ===")
-    set_robot_mode(0)
-    time.sleep(0.5)
-    set_tcp("Tool_v1")
-    time.sleep(0.5)
-    set_robot_mode(1)
-    time.sleep(0.5)
+    set_tcp_with_verify(BASE_TCP_NAME)
 
     # movej(p1, vel=30, acc=30)
     open_gripper()
-    movej(pick_pos, vel=30, acc=30)
+    movesj([pick_pos_a, pick_pos_b], vel=50, acc=50)
     movel(pick_pose_up, vel=100, acc=100)
     movel(pick_pose_down, vel=100, acc=100)
     close_gripper()
     movel(pick_pose_up, vel=100, acc=100)
 
-    print(f"\n=== 2. TCP 설정 ({selected_tcp}) ===")
-    set_robot_mode(0)
-    time.sleep(0.5)
-    set_tcp(selected_tcp)
-    time.sleep(0.5)
-    set_robot_mode(1)
-    time.sleep(0.5)
-    current_tcp = get_tcp()
-    logger.info(f"요청 TCP: {selected_tcp}, 현재 TCP: {current_tcp}")
-    if current_tcp != selected_tcp:
-        raise RuntimeError(
-            f"TCP 변경 실패: requested='{selected_tcp}', current='{current_tcp}'. "
-            "티칭펜던트 TCP 이름(대소문자/철자)을 확인하세요."
-        )
+    print(f"\n=== 2. TCP 설정 ({requested_tcp_name}) ===")
+    set_tcp_with_verify(requested_tcp_name)
 
     print("\n=== 3. 그림 그리기 작업 시작 ===")
     q_init = posj(-91.73, 4.21, -94.02, 1.68, -89.19, -1.72)
-    movej(q_init, vel=20, acc=20)
+    movej(q_init, vel=80, acc=80)
 
-    cur, _ = get_current_posx()
-    cx, cy, cz, _, _, _ = cur
+    # cur, _ = get_current_posx()
+    cx, cy, cz = -50, 370, 300 
 
     lift = 20.0
     pen_rpy = (0.0, 180.0, 90.0)
-    movel(posx(cx, cy, cz + lift, *pen_rpy), vel=50, acc=50)
+    # movel(posx(cx, cy, cz + lift, *pen_rpy), vel=50, acc=50)
 
-    cz = -2
-    movel(posx(cx, cy, cz, *pen_rpy), vel=50, acc=50)
+    cz = -3.5 # 볼펜
+    # cz = -2.7 # 네임펜
+    # movel(posx(cx, cy, cz, *pen_rpy), vel=50, acc=50)
 
     module_name = "output_linear"
     spec = importlib.util.spec_from_file_location(module_name, OUTPUT_PY)
@@ -322,17 +460,12 @@ def main(args=None):
 
     movel(posx(cx, cy, cz + lift, *pen_rpy), vel=50, acc=50)
 
-    set_robot_mode(0)
-    time.sleep(0.5)
-    set_tcp("Tool_v1")
-    time.sleep(0.5)
-    set_robot_mode(1)
-    time.sleep(0.5)
+    set_tcp_with_verify(BASE_TCP_NAME)
     logger.info(f"현재 TCP: {get_tcp()}")
 
-    movej(p1, vel=30, acc=30)
+    # movej(p1, vel=30, acc=30)
 
-    movej(pick_pos, vel=30, acc=30)
+    movesj([pick_pos_a, pick_pos_b], vel=50, acc=50)
     
     movel(pick_pose_up, vel=100, acc=100)
     movel(pick_pose_down, vel=100, acc=100)

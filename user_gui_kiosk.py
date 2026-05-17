@@ -3,6 +3,7 @@ import os
 import cv2
 import numpy as np
 import time
+import subprocess
 import traceback
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QProgressBar, 
@@ -14,6 +15,12 @@ from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor
 # Existing modules
 from modules import config
 from modules.sketch_processor import SketchProcessor
+
+PEN_TCP_ARG_MAP = {
+    "볼펜": "pen",
+    "네임펜": "name",
+    "마카": "maka",
+}
 
 # Reuse CameraThread and WorkerThread (same as basic)
 # ... (CameraThread and WorkerThread omitted for brevity, will remain in file)
@@ -93,6 +100,25 @@ class WorkerThread(QThread):
         img = image if image is not None else np.array([], dtype=np.uint8)
         self.progress_signal.emit(step_id, img, message)
 
+class RobotDrawingThread(QThread):
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, robot_script, nc_path, pen_arg):
+        super().__init__()
+        self.robot_script = robot_script
+        self.nc_path = nc_path
+        self.pen_arg = pen_arg
+
+    def run(self):
+        try:
+            subprocess.run(
+                [sys.executable, self.robot_script, self.nc_path, self.pen_arg],
+                check=True
+            )
+            self.finished_signal.emit(True, "")
+        except Exception as exc:
+            self.finished_signal.emit(False, str(exc))
+
 class KioskUserGui(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -113,6 +139,8 @@ class KioskUserGui(QMainWindow):
         }
         self.character_files = self.load_character_files()
         self.default_pen = config.PEN_PRESETS["네임펜"]
+        self.selected_pen_name = "네임펜"
+        self.selected_pen_config = self.default_pen
         self.api_key = "AIzaSyAAepYJsbdwtrVseJe3pqf0hKfvRz_yk1w"
         
         # State variables for selection
@@ -158,13 +186,15 @@ class KioskUserGui(QMainWindow):
         # Create Pages
         self.page_camera = self.create_page_camera()      # State 1
         self.page_approval = self.create_page_approval()  # State 2
-        self.page_mode = self.create_page_mode()          # State 3
-        self.page_portrait = self.create_page_portrait()  # State 4A
-        self.page_char = self.create_page_char()          # State 4B
-        self.page_result = self.create_page_result()      # State 5
+        self.page_pen = self.create_page_pen()            # State 3
+        self.page_mode = self.create_page_mode()          # State 4
+        self.page_portrait = self.create_page_portrait()  # State 5A
+        self.page_char = self.create_page_char()          # State 5B
+        self.page_result = self.create_page_result()      # State 6
         
         self.stack.addWidget(self.page_camera)
         self.stack.addWidget(self.page_approval)
+        self.stack.addWidget(self.page_pen)
         self.stack.addWidget(self.page_mode)
         self.stack.addWidget(self.page_portrait)
         self.stack.addWidget(self.page_char)
@@ -175,32 +205,35 @@ class KioskUserGui(QMainWindow):
     def create_page_camera(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
         label = QLabel("카메라 앞에 서주세요!")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("font-size: 40px; font-weight: bold; color: #333; margin: 20px;")
+        label.setStyleSheet("font-size: 45px; font-weight: bold; color: #333; margin: 15px;")
         layout.addWidget(label)
 
         self.camera_container = QFrame()
-        self.camera_container.setStyleSheet("background-color: black; border: 5px solid #2196F3; border-radius: 10px;")
+        self.camera_container.setStyleSheet("background-color: black; border-top: 3px solid #2196F3; border-bottom: 3px solid #2196F3;")
         cam_grid = QGridLayout(self.camera_container)
         cam_grid.setContentsMargins(0,0,0,0)
         
         self.camera_label = QLabel()
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.camera_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.camera_label.setScaledContents(False)
         cam_grid.addWidget(self.camera_label, 0, 0)
         
         self.overlay_label = QLabel("")
         self.overlay_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.overlay_label.setStyleSheet("color: white; font-size: 200px; font-weight: bold; background: transparent;")
+        self.overlay_label.setStyleSheet("color: white; font-size: 300px; font-weight: bold; background: transparent;")
         cam_grid.addWidget(self.overlay_label, 0, 0)
         
         layout.addWidget(self.camera_container, stretch=1)
         
         btn_capture = QPushButton("사진 촬영")
-        btn_capture.setFixedHeight(100)
-        btn_capture.setStyleSheet("background-color: #F44336; color: white; font-size: 30px; font-weight: bold;")
+        btn_capture.setFixedHeight(120)
+        btn_capture.setStyleSheet("background-color: #F44336; color: white; font-size: 40px; font-weight: bold;")
         btn_capture.clicked.connect(self.start_countdown)
         layout.addWidget(btn_capture)
         
@@ -209,32 +242,79 @@ class KioskUserGui(QMainWindow):
     def create_page_approval(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
         label = QLabel("이 사진으로 진행할까요?")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("font-size: 40px; font-weight: bold;")
+        label.setStyleSheet("font-size: 45px; font-weight: bold; margin: 15px;")
         layout.addWidget(label)
         
         self.approval_img_label = QLabel()
         self.approval_img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.approval_img_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.approval_img_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.approval_img_label.setStyleSheet("background-color: black; border-top: 3px solid #4CAF50; border-bottom: 3px solid #4CAF50;")
         layout.addWidget(self.approval_img_label, stretch=1)
         
         btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(20, 20, 20, 20)
+        btn_layout.setSpacing(20)
+        
         btn_retake = QPushButton("다시 촬영")
         btn_retake.setFixedHeight(100)
-        btn_retake.setStyleSheet("background-color: #757575; color: white; font-size: 25px;")
+        btn_retake.setStyleSheet("background-color: #757575; color: white; font-size: 35px; font-weight: bold; border-radius: 10px;")
         btn_retake.clicked.connect(self.retake_photo)
         
         btn_approve = QPushButton("이 사진 사용하기")
         btn_approve.setFixedHeight(100)
-        btn_approve.setStyleSheet("background-color: #4CAF50; color: white; font-size: 25px; font-weight: bold;")
-        btn_approve.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
+        btn_approve.setStyleSheet("background-color: #4CAF50; color: white; font-size: 35px; font-weight: bold; border-radius: 10px;")
+        btn_approve.clicked.connect(self.go_to_pen_selection)
         
         btn_layout.addWidget(btn_retake)
         btn_layout.addWidget(btn_approve)
         layout.addLayout(btn_layout)
         
+        return page
+
+    def create_page_pen(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(30)
+
+        label = QLabel("사용할 펜을 선택해주세요")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("font-size: 40px; font-weight: bold; margin: 20px;")
+        layout.addWidget(label)
+
+        self.pen_selected_label = QLabel("")
+        self.pen_selected_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pen_selected_label.setStyleSheet("font-size: 24px; color: #555;")
+        layout.addWidget(self.pen_selected_label)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(25)
+        colors = ["#455A64", "#1976D2", "#E65100"]
+
+        for idx, pen_name in enumerate(config.PEN_PRESETS.keys()):
+            btn = QPushButton(pen_name)
+            btn.setFixedSize(280, 220)
+            btn.setStyleSheet(
+                f"background-color: {colors[idx % len(colors)]}; color: white; "
+                "font-size: 34px; font-weight: bold; border-radius: 20px;"
+            )
+            btn.clicked.connect(lambda checked, name=pen_name: self.select_pen(name))
+            btn_layout.addWidget(btn)
+
+        layout.addStretch()
+        layout.addLayout(btn_layout)
+        layout.addStretch()
+
+        btn_back = QPushButton("뒤로 가기")
+        btn_back.setFixedSize(220, 70)
+        btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_approval))
+        layout.addWidget(btn_back, alignment=Qt.AlignmentFlag.AlignCenter)
+
         return page
 
     def create_page_mode(self):
@@ -268,7 +348,7 @@ class KioskUserGui(QMainWindow):
         
         btn_back = QPushButton("뒤로 가기")
         btn_back.setFixedSize(200, 60)
-        btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_approval))
+        btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_pen))
         layout.addWidget(btn_back, alignment=Qt.AlignmentFlag.AlignCenter)
         
         return page
@@ -321,7 +401,7 @@ class KioskUserGui(QMainWindow):
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
         right_layout.addWidget(btn_back)
         
-        layout.addWidget(right_widget)
+        layout.addWidget(right_widget, stretch=1)
         return page
 
     def create_page_char(self):
@@ -390,7 +470,7 @@ class KioskUserGui(QMainWindow):
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
         right_layout.addWidget(btn_back)
         
-        layout.addWidget(right_widget)
+        layout.addWidget(right_widget, stretch=1)
         return page
 
     def create_page_result(self):
@@ -556,12 +636,24 @@ class KioskUserGui(QMainWindow):
 
         if self.captured_image is None:
             self.current_frame = frame.copy()
-            pixmap = self.frame_to_pixmap(frame)
-            
-            target_size = self.camera_container.size()
-            if target_size.width() > 0 and target_size.height() > 0:
-                scaled_pixmap = pixmap.scaled(target_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                self.camera_label.setPixmap(scaled_pixmap)
+            self.display_scaled_image(self.camera_label, frame, fallback_widget=self.camera_container)
+
+    def display_scaled_image(self, label_widget, image, fallback_widget=None):
+        pixmap = self.frame_to_pixmap(image)
+        target_size = label_widget.size()
+
+        if target_size.width() < 100 or target_size.height() < 100:
+            fallback = fallback_widget if fallback_widget is not None else self.stack
+            target_size = fallback.size()
+
+        if target_size.width() <= 0 or target_size.height() <= 0:
+            return
+
+        label_widget.setPixmap(pixmap.scaled(
+            target_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        ))
 
     def start_countdown(self):
         if self.countdown_timer.isActive():
@@ -610,7 +702,21 @@ class KioskUserGui(QMainWindow):
         self.overlay_label.setText("")
         self.captured_image = None
         self.approval_img_label.clear()
+        self.selected_pen_name = "네임펜"
+        self.selected_pen_config = self.default_pen
         self.stack.setCurrentWidget(self.page_camera)
+
+    def go_to_pen_selection(self):
+        self.selected_pen_name = "네임펜"
+        self.selected_pen_config = self.default_pen
+        self.pen_selected_label.setText(f"현재 선택: {self.selected_pen_name}")
+        self.stack.setCurrentWidget(self.page_pen)
+
+    def select_pen(self, pen_name):
+        self.selected_pen_name = pen_name
+        self.selected_pen_config = config.PEN_PRESETS[pen_name]
+        self.pen_selected_label.setText(f"현재 선택: {pen_name}")
+        self.stack.setCurrentWidget(self.page_mode)
 
     def go_to_portrait_mode(self):
         self.selected_sketch_type = "GEMINI"
@@ -702,6 +808,7 @@ class KioskUserGui(QMainWindow):
             self.btn_start_char.setEnabled(True)
 
     def start_generation(self):
+        self.reset_timer.stop()
         if self.captured_image is None:
             QMessageBox.warning(self, "이미지 오류", "촬영된 사진이 없습니다.")
             return
@@ -740,7 +847,7 @@ class KioskUserGui(QMainWindow):
         self.worker = WorkerThread(
             SketchProcessor(), self.captured_image, self.selected_sketch_type,
             gemini_api_key=self.api_key, gemini_prompt=self.selected_prompt,
-            character_image=self.selected_char_img, pen_config=self.default_pen,
+            character_image=self.selected_char_img, pen_config=self.selected_pen_config,
             temperature=0.0
         )
         self.worker.progress_signal.connect(self.on_worker_progress)
@@ -768,12 +875,11 @@ class KioskUserGui(QMainWindow):
         self.result_progress.setValue(100)
         if results:
             nc_path = results[0]
-            self.result_title.setText("로봇이 그리기를 시작합니다! 감사합니다.")
+            self.result_title.setText("로봇이 그림을 그리고 있습니다. 완료될 때까지 잠시만 기다려주세요.")
             self.run_robot_drawing(nc_path)
         else:
             self.result_title.setText("그리기에 실패했습니다. 다시 시도해주세요.")
-        
-        self.reset_timer.start(15000)
+            self.reset_timer.start(15000)
 
     def on_worker_error(self, err_msg):
         self.result_progress.setRange(0, 100)
@@ -781,12 +887,20 @@ class KioskUserGui(QMainWindow):
         self.reset_timer.start(5000)
 
     def run_robot_drawing(self, nc_path):
-        import subprocess
         robot_script = os.path.join(os.path.dirname(__file__), "modules", "fianl_drawing_robot.py")
-        try:
-            subprocess.Popen([sys.executable, robot_script, nc_path, "pen"])
-        except Exception:
-            pass
+        pen_arg = PEN_TCP_ARG_MAP.get(self.selected_pen_name, "pen")
+        self.robot_thread = RobotDrawingThread(robot_script, nc_path, pen_arg)
+        self.robot_thread.finished_signal.connect(self.on_robot_drawing_finished)
+        self.robot_thread.start()
+
+    def on_robot_drawing_finished(self, success, error_message):
+        if success:
+            self.result_title.setText("로봇 그리기가 완료되었습니다. 잠시 후 처음 화면으로 돌아갑니다.")
+            self.reset_timer.start(5000)
+            return
+
+        self.result_title.setText(f"로봇 실행 오류: {error_message}")
+        self.reset_timer.start(10000)
 
     def reset_to_standby(self):
         self.captured_image = None
@@ -795,6 +909,8 @@ class KioskUserGui(QMainWindow):
         self.selected_char_filename = None
         self.selected_char_img = None
         self.selected_prompt_name = None
+        self.selected_pen_name = "네임펜"
+        self.selected_pen_config = self.default_pen
         self.btn_start_portrait.setEnabled(False)
         self.btn_start_char.setEnabled(False)
         self.stack.setCurrentWidget(self.page_camera)
