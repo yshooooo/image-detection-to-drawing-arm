@@ -1,6 +1,10 @@
 __pycache__/
+**/__pycache__/
 .ipynb_checkpoints/
 *.pyc
+*.pyo
+*.pyd
+*.py[cod]
 garbageFile/
 Test/
 data/*
