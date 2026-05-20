@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QProgressBar, 
                              QMessageBox, QFrame, QGridLayout, QSizePolicy,
                              QStackedWidget, QScrollArea)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
-from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QSize
+from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QIcon
 
 # Existing modules
 from modules import config
@@ -407,70 +407,93 @@ class KioskUserGui(QMainWindow):
     def create_page_char(self):
         page = QWidget()
         layout = QHBoxLayout(page)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(24)
         
         # Left: Preview
         self.char_preview = QLabel()
         self.char_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.char_preview.setStyleSheet("border: 3px solid #ccc; background-color: #eee;")
+        self.char_preview.setStyleSheet("border: 4px solid #F9A826; background-color: #1e1e1e; border-radius: 20px;")
         self.char_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.char_preview, stretch=1)
+        layout.addWidget(self.char_preview, stretch=2)
         
         # Right
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(10, 10, 10, 10)
+        right_layout.setSpacing(18)
         
         # Characters
         label_char = QLabel("1. 캐릭터 선택")
-        label_char.setStyleSheet("font-size: 25px; font-weight: bold;")
+        label_char.setStyleSheet("font-size: 28px; font-weight: bold; color: #333;")
         right_layout.addWidget(label_char)
         
         char_scroll = QScrollArea()
-        char_scroll.setFixedHeight(150)
+        char_scroll.setFixedHeight(180)
         char_scroll.setWidgetResizable(True)
         char_container = QWidget()
+        char_container.setStyleSheet("background: transparent;")
         char_layout = QHBoxLayout(char_container)
+        char_layout.setSpacing(12)
         
         for f in self.character_files:
-            char_name = os.path.splitext(f)[0]
-            btn = QPushButton(f"🐾 {char_name}")
-            btn.setFixedSize(120, 100)
-            btn.setStyleSheet("background-color: #607D8B; color: white; font-size: 15px; border-radius: 10px;")
+            char_path = os.path.join(config.CHARACTERS_DIR, f)
+            btn = QPushButton()
+            btn.setFixedSize(140, 140)
+            
+            # Load and set character image on button
+            img_array = np.fromfile(char_path, np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+            if img is not None:
+                pixmap = self.frame_to_pixmap(img)
+                btn.setIcon(QIcon(pixmap))
+                btn.setIconSize(QSize(120, 120))
+            
+            btn.setStyleSheet("background-color: #607D8B; border-radius: 15px; border: 2px solid #455A64;")
             btn.clicked.connect(lambda checked, img=f: self.select_character(img))
             char_layout.addWidget(btn)
         char_scroll.setWidget(char_container)
         right_layout.addWidget(char_scroll)
         
-        # Prompts
+        # Prompts (Action styles)
         label_prompt = QLabel("2. 동반 스타일 선택")
-        label_prompt.setStyleSheet("font-size: 25px; font-weight: bold;")
+        label_prompt.setStyleSheet("font-size: 28px; font-weight: bold; color: #333;")
         right_layout.addWidget(label_prompt)
         
         prompt_scroll = QScrollArea()
         prompt_scroll.setWidgetResizable(True)
         prompt_container = QWidget()
-        prompt_layout = QVBoxLayout(prompt_container)
+        prompt_container.setStyleSheet("background: transparent;")
+        prompt_grid = QGridLayout(prompt_container)
+        prompt_grid.setSpacing(12)
         
-        for name, prompt in self.char_prompts_dict.items():
+        colors = ["#78909C", "#5C6BC0", "#26A69A", "#42A5F5"]
+        
+        for i, (name, prompt) in enumerate(self.char_prompts_dict.items()):
             btn = QPushButton(name)
-            btn.setFixedHeight(60)
-            btn.setStyleSheet("background-color: #9E9E9E; color: white; font-size: 16px; border-radius: 5px;")
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            color = colors[i % len(colors)]
+            btn.setStyleSheet(f"background-color: {color}; color: white; font-size: 20px; font-weight: bold; border-radius: 12px; padding: 10px;")
             btn.clicked.connect(lambda checked, p=prompt, n=name: self.select_char_prompt(p, n))
-            prompt_layout.addWidget(btn)
+            prompt_grid.addWidget(btn, i // 2, i % 2)
+            
         prompt_scroll.setWidget(prompt_container)
-        right_layout.addWidget(prompt_scroll)
+        right_layout.addWidget(prompt_scroll, stretch=1)
         
         self.btn_start_char = QPushButton("생성 시작")
         self.btn_start_char.setFixedHeight(80)
         self.btn_start_char.setEnabled(False)
-        self.btn_start_char.setStyleSheet("background-color: #FF9800; color: white; font-size: 25px; font-weight: bold;")
+        self.btn_start_char.setStyleSheet("background-color: #FF9800; color: white; font-size: 28px; font-weight: bold; border-radius: 15px;")
         self.btn_start_char.clicked.connect(self.start_generation)
         right_layout.addWidget(self.btn_start_char)
         
         btn_back = QPushButton("이전으로")
+        btn_back.setFixedHeight(60)
+        btn_back.setStyleSheet("background-color: #757575; color: white; font-size: 22px; font-weight: bold; border-radius: 12px;")
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
         right_layout.addWidget(btn_back)
         
-        layout.addWidget(right_widget, stretch=1)
+        layout.addWidget(right_widget, stretch=3)
         return page
 
     def create_page_result(self):

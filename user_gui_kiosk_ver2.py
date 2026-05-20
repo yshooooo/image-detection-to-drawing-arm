@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QProgressBar, 
                              QMessageBox, QFrame, QGridLayout, QSizePolicy,
                              QStackedWidget, QScrollArea, QGraphicsDropShadowEffect)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
-from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QSize
+from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QIcon
 
 # Existing modules
 from modules import config
@@ -539,7 +539,7 @@ class KioskUserGui(QMainWindow):
         self.portrait_preview.setStyleSheet(self.image_frame_style("#93C5FD"))
         self.portrait_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.apply_shadow(self.portrait_preview, blur=38, y_offset=12, alpha=60)
-        layout.addWidget(self.portrait_preview, stretch=1)
+        layout.addWidget(self.portrait_preview, stretch=2)
         
         # Right: Prompts
         right_widget = self.create_glass_panel()
@@ -564,17 +564,17 @@ class KioskUserGui(QMainWindow):
         ]
         for i, (name, prompt) in enumerate(self.prompts_dict.items()):
             btn = QPushButton(name.split(".")[-1].strip())
-            btn.setFixedSize(200, 100)
+            # Removed fixed height and added expanding size policy to fill vertical space
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             start, end = colors[i % len(colors)]
-            btn.setStyleSheet(self.card_button_style(start, end, font_size=18, radius=22))
+            btn.setStyleSheet(self.card_button_style(start, end, font_size=24, radius=22))
             btn.clicked.connect(lambda checked, p=prompt, n=name: self.select_portrait_prompt(p, n))
             self.portrait_grid.addWidget(btn, i // 2, i % 2)
             
         portrait_scroll = QScrollArea()
         portrait_scroll.setWidgetResizable(True)
         portrait_scroll.setWidget(self.portrait_btn_group)
-        right_layout.addWidget(portrait_scroll)
-        right_layout.addStretch()
+        right_layout.addWidget(portrait_scroll, stretch=1) # Give scroll area stretch priority
         
         self.btn_start_portrait = QPushButton("생성 시작")
         self.btn_start_portrait.setFixedHeight(80)
@@ -589,7 +589,7 @@ class KioskUserGui(QMainWindow):
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
         right_layout.addWidget(btn_back)
         
-        layout.addWidget(right_widget, stretch=1)
+        layout.addWidget(right_widget, stretch=3)
         return page
 
     def create_page_char(self):
@@ -604,7 +604,7 @@ class KioskUserGui(QMainWindow):
         self.char_preview.setStyleSheet(self.image_frame_style("#F9A826"))
         self.char_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.apply_shadow(self.char_preview, blur=38, y_offset=12, alpha=60)
-        layout.addWidget(self.char_preview, stretch=1)
+        layout.addWidget(self.char_preview, stretch=2)
         
         # Right
         right_widget = self.create_glass_panel()
@@ -618,7 +618,7 @@ class KioskUserGui(QMainWindow):
         right_layout.addWidget(label_char)
         
         char_scroll = QScrollArea()
-        char_scroll.setFixedHeight(150)
+        char_scroll.setFixedHeight(180) # Slightly increased height for image buttons
         char_scroll.setWidgetResizable(True)
         char_container = QWidget()
         char_container.setStyleSheet("background: transparent;")
@@ -626,16 +626,25 @@ class KioskUserGui(QMainWindow):
         char_layout.setSpacing(12)
         
         for f in self.character_files:
-            char_name = os.path.splitext(f)[0]
-            btn = QPushButton(char_name)
-            btn.setFixedSize(120, 100)
-            btn.setStyleSheet(self.card_button_style("#355C7D", "#6C5B7B", font_size=15, radius=18))
+            char_path = os.path.join(config.CHARACTERS_DIR, f)
+            btn = QPushButton()
+            btn.setFixedSize(140, 140)
+            
+            # Load and set character image on button
+            img_array = np.fromfile(char_path, np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+            if img is not None:
+                pixmap = self.frame_to_pixmap(img)
+                btn.setIcon(QIcon(pixmap))
+                btn.setIconSize(QSize(120, 120))
+            
+            btn.setStyleSheet(self.card_button_style("#355C7D", "#6C5B7B", font_size=0, radius=18)) # font_size=0 since we use icon
             btn.clicked.connect(lambda checked, img=f: self.select_character(img))
             char_layout.addWidget(btn)
         char_scroll.setWidget(char_container)
         right_layout.addWidget(char_scroll)
         
-        # Prompts
+        # Prompts (Action styles)
         label_prompt = QLabel("2. 동반 스타일 선택")
         label_prompt.setStyleSheet(self.title_style(26))
         right_layout.addWidget(label_prompt)
@@ -644,17 +653,27 @@ class KioskUserGui(QMainWindow):
         prompt_scroll.setWidgetResizable(True)
         prompt_container = QWidget()
         prompt_container.setStyleSheet("background: transparent;")
-        prompt_layout = QVBoxLayout(prompt_container)
-        prompt_layout.setSpacing(12)
+        # Changed to QGridLayout for 2-column layout
+        prompt_grid = QGridLayout(prompt_container)
+        prompt_grid.setSpacing(12)
         
-        for name, prompt in self.char_prompts_dict.items():
+        colors = [
+            ("#8E9EAB", "#65799B"),
+            ("#7474BF", "#348AC7"),
+            ("#4CA1AF", "#2C3E50"),
+            ("#2BC0E4", "#EAECC6"),
+        ]
+        
+        for i, (name, prompt) in enumerate(self.char_prompts_dict.items()):
             btn = QPushButton(name)
-            btn.setFixedHeight(60)
-            btn.setStyleSheet(self.gradient_button_style("#8E9EAB", "#65799B", font_size=16, radius=18, padding="14px 18px"))
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            start, end = colors[i % len(colors)]
+            btn.setStyleSheet(self.gradient_button_style(start, end, font_size=20, radius=18, padding="10px"))
             btn.clicked.connect(lambda checked, p=prompt, n=name: self.select_char_prompt(p, n))
-            prompt_layout.addWidget(btn)
+            prompt_grid.addWidget(btn, i // 2, i % 2) # 2-column grid
+            
         prompt_scroll.setWidget(prompt_container)
-        right_layout.addWidget(prompt_scroll)
+        right_layout.addWidget(prompt_scroll, stretch=1)
         
         self.btn_start_char = QPushButton("생성 시작")
         self.btn_start_char.setFixedHeight(80)
@@ -669,7 +688,7 @@ class KioskUserGui(QMainWindow):
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
         right_layout.addWidget(btn_back)
         
-        layout.addWidget(right_widget, stretch=1)
+        layout.addWidget(right_widget, stretch=3)
         return page
 
     def create_page_result(self):

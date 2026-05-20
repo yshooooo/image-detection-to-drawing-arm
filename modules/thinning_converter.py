@@ -52,12 +52,15 @@ def optimize_path_order(paths):
 
     return ordered
 
-def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_filepath: str) -> bool:
+def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_filepath: str, use_bspline: bool = True) -> bool:
     """
     이미 이진화된 이미지를 입력받아 세선화(Thinning)하고, 
-    B-Spline 보간법을 적용하여 매우 부드러운 NC/SVG 파일을 생성합니다.
+    B-Spline 보간법을 선택적으로 적용하여 부드러운 NC/SVG 파일을 생성합니다.
     """
-    print(">> [2단계] 파일 생성 시작 (세선화 + B-Spline 곡선 최적화)")
+    if use_bspline:
+        print(">> [2단계] 파일 생성 시작 (세선화 + B-Spline 곡선 최적화)")
+    else:
+        print(">> [2단계] 파일 생성 시작 (세선화 + 직선 경로)")
 
     # 1. 흑백 반전 및 세선화
     inverted_binary = cv2.bitwise_not(binary_image)
@@ -90,7 +93,7 @@ def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_file
                     cx, cy = next_pixel
 
                  # 3. [핵심] 수집된 픽셀 경로에 B-Spline 적용
-                if len(path) > 5: 
+                if use_bspline and len(path) > 5: 
                     path_np = np.array(path, dtype=np.float32)
                     
                     # 3차 스플라인 곡선을 그리려면 최소 4개의 점이 필요합니다.
@@ -118,6 +121,9 @@ def generate_files_thinning(binary_image: np.ndarray, nc_filepath: str, svg_file
                             paths.append([(float(p[0]), float(p[1])) for p in path_np])
                     else:
                         paths.append([(float(p[0]), float(p[1])) for p in path_np])
+                else:
+                    # B-Spline을 사용하지 않거나 점이 너무 적은 경우
+                    paths.append(path)
 
     # 4. SVG 및 G-코드 생성
     paths = optimize_path_order(paths)
