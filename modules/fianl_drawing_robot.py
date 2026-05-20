@@ -21,13 +21,14 @@ logger = get_logger("single_robot_simple_logger")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_PY = os.path.join(BASE_DIR, "output_linear.py")
-Y_Z_TOTAL_OFFSET = -0.6
+ROBOT_SIGN_PATH = os.path.join(os.path.dirname(BASE_DIR), "Robot_Sign.py")
+Y_Z_TOTAL_OFFSET = -0.9   # 그릴때 y값 낮춰주는 비율
 Y_INTERPOLATION_LENGTH = 100.0
 NORMALIZE_TO_FIXED_BOX = False
 RAW_COORD_SCALE = 1.0
 TARGET_DRAW_WIDTH_MM = 100.0
 TARGET_DRAW_HEIGHT_MM = 100.0
-SELECTED_PEN = "pen"
+SELECTED_PEN = "name"
 BASE_TCP_NAME = "Tool_v1"
 MIN_POINT_DISTANCE_MM = 0.5
 RDP_EPSILON_MM = 0.3
@@ -51,6 +52,12 @@ DRAW_TCP_NAME_MAP = {
     "pen": "pen",
     "name": "name",
     "maka": "maka",
+}
+
+PEN_CZ_MAP = {
+    "pen": -0.3,
+    "name": 1.0,
+    "maka": 8.5,
 }
 
 PEN_PICK_CONFIG = {
@@ -206,7 +213,7 @@ def build_motion_sequence(lines):
         if z_match:
             current_z = float(z_match.group(1))
 
-        point = (current_x * RAW_COORD_SCALE, current_y * RAW_COORD_SCALE, current_z)
+        point = (current_x, current_y, current_z)
 
         if line.startswith("G0"):
             flush_stroke()
@@ -218,14 +225,50 @@ def build_motion_sequence(lines):
     return motions
 
 
-def gcode_to_dsr_function(input_nc, output_py):
+def get_points_bounds(points):
+    if not points:
+        raise ValueError("좌표가 비어 있어 바운딩 박스를 계산할 수 없습니다.")
+
+    xs = [x for x, _, _ in points]
+    ys = [y for _, y, _ in points]
+    zs = [z for _, _, z in points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    min_z, max_z = min(zs), max(zs)
+
+    return {
+        "min_x": min_x,
+        "max_x": max_x,
+        "min_y": min_y,
+        "max_y": max_y,
+        "min_z": min_z,
+        "max_z": max_z,
+        "span_x": max_x - min_x,
+        "span_y": max_y - min_y,
+        "span_z": max_z - min_z,
+        "center_x": (min_x + max_x) / 2.0,
+        "center_y": (min_y + max_y) / 2.0,
+    }
+
+
+def build_transformed_motions(lines, coord_scale=RAW_COORD_SCALE):
+    motions = build_motion_sequence(lines)
+    transformed = []
+
+    for command, (x, y, z) in motions:
+        transformed.append((command, (x * coord_scale, y * coord_scale, z)))
+
+    return transformed
+
+
+def read_gcode_points(input_nc, coord_scale=RAW_COORD_SCALE):
     with open(input_nc, "r", encoding="utf-8") as file:
         lines = file.readlines()
 
     current_x = 0.0
     current_y = 0.0
     current_z = 0.0
-    raw_points = []
+    points = []
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -244,40 +287,18 @@ def gcode_to_dsr_function(input_nc, output_py):
         if z_match:
             current_z = float(z_match.group(1))
 
-        raw_points.append((current_x * RAW_COORD_SCALE, current_y * RAW_COORD_SCALE, current_z))
+        points.append((current_x * coord_scale, current_y * coord_scale, current_z))
 
-    motions = build_motion_sequence(lines)
+    return points
+
+
+def write_dsr_output(motions, output_py):
     points = [point for _, point in motions]
-
-    print(f"원래 점 개수: {len(raw_points)}")
-    print(f"압축 후 점 개수: {len(points)}")
-
-    if not points:
-        raise ValueError("G-code에서 유효한 좌표를 찾지 못했습니다.")
-
-    xs = [x for x, _, _ in points]
-    ys = [y for _, y, _ in points]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-    span_x = max_x - min_x
-    span_y = max_y - min_y
-
-    if NORMALIZE_TO_FIXED_BOX:
-        # 필요할 때만 고정 물리 크기(mm) 박스로 정규화
-        if span_x <= 1e-9 or span_y <= 1e-9:
-            raise ValueError("G-code 경로 크기가 너무 작아 정규화할 수 없습니다.")
-        mm_scale = min(TARGET_DRAW_WIDTH_MM / span_x, TARGET_DRAW_HEIGHT_MM / span_y)
-        points = [
-            ((x - min_x) * mm_scale, (y - min_y) * mm_scale, z)
-            for x, y, z in points
-        ]
-        ys = [y for _, y, _ in points]
-        min_y, max_y = min(ys), max(ys)
-        span_y = max_y - min_y
+    bounds = get_points_bounds(points)
 
     y_values = [y for _, y, _ in points]
     y_start = max(y_values)
-    y_interp_len = span_y if span_y > 1e-9 else Y_INTERPOLATION_LENGTH
+    y_interp_len = bounds["span_y"] if bounds["span_y"] > 1e-9 else Y_INTERPOLATION_LENGTH
 
     output = []
     output.append("from DSR_ROBOT2 import movel, posx\n\n")
@@ -307,7 +328,58 @@ def gcode_to_dsr_function(input_nc, output_py):
     with open(output_py, "w", encoding="utf-8") as file:
         file.writelines(output)
 
-    print("Y 범위 기반 선형 Z 보정 output_linear.py 생성 완료!")
+    return {
+        "bounds": bounds,
+        "point_count": len(points),
+    }
+
+
+def gcode_to_dsr_function(input_nc, output_py, coord_scale=RAW_COORD_SCALE):
+    with open(input_nc, "r", encoding="utf-8") as file:
+        lines = file.readlines()
+
+    raw_points = read_gcode_points(input_nc, coord_scale=coord_scale)
+
+    motions = build_transformed_motions(lines, coord_scale=coord_scale)
+    points = [point for _, point in motions]
+
+    print(f"원래 점 개수: {len(raw_points)}")
+    print(f"압축 후 점 개수: {len(points)}")
+
+    if not points:
+        raise ValueError("G-code에서 유효한 좌표를 찾지 못했습니다.")
+
+    xs = [x for x, _, _ in points]
+    ys = [y for _, y, _ in points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span_x = max_x - min_x
+    span_y = max_y - min_y
+
+    if NORMALIZE_TO_FIXED_BOX:
+        # 필요할 때만 고정 물리 크기(mm) 박스로 정규화
+        if span_x <= 1e-9 or span_y <= 1e-9:
+            raise ValueError("G-code 경로 크기가 너무 작아 정규화할 수 없습니다.")
+        mm_scale = min(TARGET_DRAW_WIDTH_MM / span_x, TARGET_DRAW_HEIGHT_MM / span_y)
+        motions = [
+            (command, ((x - min_x) * mm_scale, (y - min_y) * mm_scale, z))
+            for command, (x, y, z) in motions
+        ]
+
+    metadata = write_dsr_output(motions, output_py)
+    print(f"Y 범위 기반 선형 Z 보정 {os.path.basename(output_py)} 생성 완료!")
+    return metadata
+
+
+def load_draw_module(module_name, module_path):
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"생성된 모듈을 불러올 수 없습니다: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def main(args=None):
@@ -340,7 +412,6 @@ def main(args=None):
     try:
         from DSR_ROBOT2 import (
             ROBOT_MODE_AUTONOMOUS,
-            get_current_posx,
             get_tcp,
             movej,
             movesj,
@@ -407,6 +478,24 @@ def main(args=None):
             "티칭펜던트 TCP 이름(대소문자/철자)을 확인하세요."
         )
 
+    def resolve_pen_key_from_tcp_name(tcp_name):
+        normalized_tcp = _normalize_tcp_name(tcp_name)
+        for pen_key, mapped_tcp_name in DRAW_TCP_NAME_MAP.items():
+            if _normalize_tcp_name(mapped_tcp_name) == normalized_tcp:
+                return pen_key
+        return None
+
+    def resolve_cz_value(default_pen_key):
+        current_tcp_name = get_tcp()
+        current_pen_key = resolve_pen_key_from_tcp_name(current_tcp_name)
+        pen_key = current_pen_key or default_pen_key
+        if pen_key not in PEN_CZ_MAP:
+            raise KeyError(f"cz 값이 정의되지 않은 펜 타입입니다: {pen_key}")
+        logger.info(
+            f"cz 설정: tcp='{current_tcp_name}', pen_key='{pen_key}', cz={PEN_CZ_MAP[pen_key]}"
+        )
+        return PEN_CZ_MAP[pen_key]
+
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
     p1 = posj(0, 0, 0, 0, 0, 0)
@@ -439,29 +528,41 @@ def main(args=None):
     movej(q_init, vel=80, acc=80)
 
     # cur, _ = get_current_posx()
-    cx, cy, cz = -50, 370, 300 
+    cx, cy, cz = -40, 350, 300 
 
     lift = 20.0
     pen_rpy = (0.0, 180.0, 90.0)
     # movel(posx(cx, cy, cz + lift, *pen_rpy), vel=50, acc=50)
 
-    cz = -24 # 볼펜
-    # cz = -2.7 # 네임펜
-    # cz = 4.5 # 마카
+    cz = resolve_cz_value(selected_tcp)
 
     # movel(posx(cx, cy, cz, *pen_rpy), vel=50, acc=50)
 
-    module_name = "output_linear"
-    spec = importlib.util.spec_from_file_location(module_name, OUTPUT_PY)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"생성된 모듈을 불러올 수 없습니다: {OUTPUT_PY}")
-    output_linear = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = output_linear
-    spec.loader.exec_module(output_linear)
+    output_linear = load_draw_module("output_linear_main", OUTPUT_PY)
     output_linear.draw(cx, cy, cz)
 
     movel(posx(cx, cy, cz + lift, *pen_rpy), vel=50, acc=50)
 
+    print("\n=== 4. 사인 그리기 작업 시작 ===")
+    sign_module = load_draw_module("robot_sign_main", ROBOT_SIGN_PATH)
+    sign_module.generate_sign_output(sign_module.SIGN_NC_PATH, sign_module.SIGN_OUTPUT_PY)
+    output_linear_sign = load_draw_module("output_linear_sign_main", sign_module.SIGN_OUTPUT_PY)
+
+    movej(posj(*sign_module.DRAW_READY_JOINT), vel=80, acc=80)
+    sign_cz = resolve_cz_value(selected_tcp) - 0.3
+    output_linear_sign.draw(sign_module.SIGN_DRAW_CX, sign_module.SIGN_DRAW_CY, sign_cz)
+    movel(
+        posx(
+            sign_module.SIGN_DRAW_CX,
+            sign_module.SIGN_DRAW_CY,
+            sign_cz + sign_module.SIGN_LIFT_MM,
+            *pen_rpy,
+        ),
+        vel=50,
+        acc=50,
+    )
+
+    print("\n=== 5. 펜 반납 ===")
     set_tcp_with_verify(BASE_TCP_NAME)
     logger.info(f"현재 TCP: {get_tcp()}")
 
