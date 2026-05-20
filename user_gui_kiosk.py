@@ -5,10 +5,14 @@ import numpy as np
 import time
 import subprocess
 import traceback
+from dotenv import load_dotenv
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QProgressBar, 
                              QMessageBox, QFrame, QGridLayout, QSizePolicy,
                              QStackedWidget, QScrollArea)
+
+# .env 파일 로드
+load_dotenv()
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QSize
 from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QIcon
 
@@ -141,7 +145,7 @@ class KioskUserGui(QMainWindow):
         self.default_pen = config.PEN_PRESETS["네임펜"]
         self.selected_pen_name = "네임펜"
         self.selected_pen_config = self.default_pen
-        self.api_key = "AIzaSyAAepYJsbdwtrVseJe3pqf0hKfvRz_yk1w"
+        self.api_key = os.getenv("GEMINI_API_KEY", "")
         
         # State variables for selection
         self.selected_sketch_type = None

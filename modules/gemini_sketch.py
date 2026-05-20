@@ -2,8 +2,12 @@ import os
 import cv2
 import numpy as np
 import time
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+
+# .env 파일 로드
+load_dotenv()
 
 # --- Gemini API 설정 ---
 MODEL_ID = "gemini-3.1-flash-image-preview"

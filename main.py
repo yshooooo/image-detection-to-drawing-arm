@@ -4,7 +4,11 @@ import numpy as np
 import shutil
 import json
 import datetime
+from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
+
+# .env 파일 로드
+load_dotenv()
 from modules import (
     config,
     image_processor,

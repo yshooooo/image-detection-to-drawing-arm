@@ -3,9 +3,13 @@ import os
 import cv2
 import numpy as np
 import time
+from dotenv import load_dotenv
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QComboBox, QPushButton, 
                              QProgressBar, QMessageBox)
+
+# .env 파일 로드
+load_dotenv()
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QPixmap
 
@@ -103,7 +107,7 @@ class BasicUserGui(QMainWindow):
         
         self.prompts_dict = config.load_prompts()
         self.default_pen = config.PEN_PRESETS["네임펜"] # 기본값 고정
-        self.api_key = "AIzaSyAAepYJsbdwtrVseJe3pqf0hKfvRz_yk1w" # 여기에 실제 API 키 입력
+        self.api_key = os.getenv("GEMINI_API_KEY", "") # .env 파일에서 로드
         
         self.init_ui()
         self.start_camera()

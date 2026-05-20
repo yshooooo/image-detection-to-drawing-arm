@@ -14,7 +14,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 # .env 파일 로드
 load_dotenv()
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QSize
-from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QIcon
+from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QIcon, QFontDatabase
+from qt_material import apply_stylesheet
 
 # Existing modules
 from modules import config
@@ -26,8 +27,13 @@ PEN_TCP_ARG_MAP = {
     "마카": "maka",
 }
 
-# Reuse CameraThread and WorkerThread (same as basic)
-# ... (CameraThread and WorkerThread omitted for brevity, will remain in file)
+# Color Palette from image
+C_OCEAN_DEEP = "#0267C1"
+C_TWITTER_BLUE = "#0075C4"
+C_GOLDEN_ORANGE = "#EFA00B"
+C_SPICY_ORANGE = "#D65108"
+C_DARK_WALNUT = "#591F0A"
+
 class CameraThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
     status_signal = pyqtSignal(str)
@@ -126,7 +132,7 @@ class RobotDrawingThread(QThread):
 class KioskUserGui(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AI 포토부스 - 키오스크 모드")
+        self.setWindowTitle("AI 포토부스 - 키오스크 모드 (Shadow)")
         
         self.processor = SketchProcessor()
         self.current_frame = None
@@ -170,6 +176,13 @@ class KioskUserGui(QMainWindow):
         self.showMaximized()
         self.start_camera()
 
+    def apply_shadow(self, widget, blur_radius=15, alpha=80, offset=(3, 3)):
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(blur_radius)
+        shadow.setColor(QColor(0, 0, 0, alpha))
+        shadow.setOffset(offset[0], offset[1])
+        widget.setGraphicsEffect(shadow)
+
     def load_character_files(self):
         if not os.path.exists(config.CHARACTERS_DIR):
             return []
@@ -178,141 +191,13 @@ class KioskUserGui(QMainWindow):
             if f.lower().endswith(('.png', '.jpg', '.jpeg'))
         ])
 
-    def apply_shadow(self, widget, blur=32, y_offset=10, alpha=70):
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(blur)
-        shadow.setXOffset(0)
-        shadow.setYOffset(y_offset)
-        shadow.setColor(QColor(15, 23, 42, alpha))
-        widget.setGraphicsEffect(shadow)
-
-    def create_glass_panel(self):
-        panel = QFrame()
-        panel.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 0.72);"
-            "border: 1px solid rgba(255, 255, 255, 0.85);"
-            "border-radius: 28px;"
-        )
-        self.apply_shadow(panel, blur=42, y_offset=12, alpha=55)
-        return panel
-
-    def title_style(self, size=42):
-        return (
-            f"font-size: {size}px;"
-            "font-weight: 800;"
-            "color: #14213D;"
-            "letter-spacing: -1px;"
-            "margin: 12px 0px;"
-        )
-
-    def subtitle_style(self, size=22):
-        return (
-            f"font-size: {size}px;"
-            "font-weight: 600;"
-            "color: #526071;"
-        )
-
-    def gradient_button_style(self, start, end, font_size=30, radius=24, padding="20px 28px"):
-        return f"""
-            QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {start}, stop:1 {end});
-                color: white;
-                font-size: {font_size}px;
-                font-weight: 800;
-                border: none;
-                border-radius: {radius}px;
-                padding: {padding};
-            }}
-            QPushButton:hover {{
-                border: 2px solid rgba(255, 255, 255, 0.35);
-            }}
-            QPushButton:pressed {{
-                padding-top: 22px;
-                padding-bottom: 18px;
-            }}
-            QPushButton:disabled {{
-                background: #B9C3D0;
-                color: rgba(255, 255, 255, 0.85);
-            }}
-        """
-
-    def neutral_button_style(self, font_size=24, radius=22):
-        return f"""
-            QPushButton {{
-                background-color: rgba(20, 33, 61, 0.88);
-                color: white;
-                font-size: {font_size}px;
-                font-weight: 700;
-                border: none;
-                border-radius: {radius}px;
-                padding: 18px 28px;
-            }}
-            QPushButton:hover {{
-                background-color: rgba(45, 64, 89, 0.95);
-            }}
-            QPushButton:pressed {{
-                background-color: rgba(14, 22, 40, 0.98);
-            }}
-        """
-
-    def card_button_style(self, start, end, font_size=28, radius=28):
-        return f"""
-            QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {start}, stop:1 {end});
-                color: white;
-                font-size: {font_size}px;
-                font-weight: 800;
-                border: none;
-                border-radius: {radius}px;
-                padding: 26px;
-                text-align: center;
-            }}
-            QPushButton:hover {{
-                border: 3px solid rgba(255, 255, 255, 0.42);
-            }}
-            QPushButton:pressed {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {end}, stop:1 {start});
-            }}
-        """
-
-    def image_frame_style(self, border_color):
-        return (
-            "background-color: rgba(11, 18, 32, 0.92);"
-            f"border: 4px solid {border_color};"
-            "border-radius: 28px;"
-        )
-
     def init_ui(self):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.central_widget.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #F4F7FB, stop:0.55 #EEF3F8, stop:1 #E5ECF6);
-            }
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-            QScrollBar:vertical {
-                width: 12px;
-                background: rgba(20, 33, 61, 0.08);
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(74, 109, 167, 0.5);
-                border-radius: 6px;
-                min-height: 24px;
-            }
-        """)
         self.main_layout = QVBoxLayout(self.central_widget)
-        self.main_layout.setContentsMargins(24, 24, 24, 24)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
         
         self.stack = QStackedWidget()
-        self.stack.setStyleSheet("background: transparent;")
         self.main_layout.addWidget(self.stack)
         
         # Create Pages
@@ -336,30 +221,20 @@ class KioskUserGui(QMainWindow):
 
     def create_page_camera(self):
         page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(18, 18, 18, 18)
-        outer.setSpacing(0)
-
-        shell = self.create_glass_panel()
-        layout = QVBoxLayout(shell)
-        layout.setContentsMargins(36, 28, 36, 36)
-        layout.setSpacing(24)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
         label = QLabel("카메라 앞에 서주세요!")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet(self.title_style(48))
+        label.setStyleSheet("font-size: 45px; font-weight: bold; color: white; margin: 15px;")
         layout.addWidget(label)
 
         self.camera_container = QFrame()
-        self.camera_container.setStyleSheet("""
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #0F2027, stop:0.5 #203A43, stop:1 #2C5364);
-            border-radius: 34px;
-            border: 3px solid rgba(255, 255, 255, 0.18);
-        """)
-        self.apply_shadow(self.camera_container, blur=50, y_offset=16, alpha=80)
+        self.camera_container.setStyleSheet("background-color: black; border-top: 3px solid #2196F3; border-bottom: 3px solid #2196F3;")
+        self.apply_shadow(self.camera_container) # Apply shadow
         cam_grid = QGridLayout(self.camera_container)
-        cam_grid.setContentsMargins(16, 16, 16, 16)
+        cam_grid.setContentsMargins(0,0,0,0)
         
         self.camera_label = QLabel()
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -369,104 +244,147 @@ class KioskUserGui(QMainWindow):
         
         self.overlay_label = QLabel("")
         self.overlay_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.overlay_label.setStyleSheet(
-            "color: rgba(255, 255, 255, 0.95);"
-            "font-size: 300px; font-weight: 900; background: transparent;"
-        )
+        self.overlay_label.setStyleSheet("color: white; font-size: 300px; font-weight: bold; background: transparent;")
         cam_grid.addWidget(self.overlay_label, 0, 0)
         
         layout.addWidget(self.camera_container, stretch=1)
         
         btn_capture = QPushButton("사진 촬영")
         btn_capture.setFixedHeight(120)
-        btn_capture.setStyleSheet(self.gradient_button_style("#FF6B6B", "#FF4757", font_size=40, radius=28, padding="22px"))
-        self.apply_shadow(btn_capture)
+        btn_capture.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336; 
+                color: white; 
+                font-size: 40px; 
+                font-weight: bold;
+                border-radius: 15px;
+            }
+            QPushButton:hover {
+                background-color: #E53935;
+            }
+            QPushButton:pressed {
+                background-color: #D32F2F;
+                padding-top: 5px;
+            }
+        """)
+        self.apply_shadow(btn_capture) # Apply shadow
         btn_capture.clicked.connect(self.start_countdown)
         layout.addWidget(btn_capture)
-
-        outer.addWidget(shell)
         
         return page
 
     def create_page_approval(self):
         page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(18, 18, 18, 18)
-
-        shell = self.create_glass_panel()
-        layout = QVBoxLayout(shell)
-        layout.setContentsMargins(36, 28, 36, 36)
-        layout.setSpacing(22)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
         label = QLabel("이 사진으로 진행할까요?")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet(self.title_style(46))
+        label.setStyleSheet("font-size: 45px; font-weight: bold; color: white; margin: 15px;")
         layout.addWidget(label)
         
         self.approval_img_label = QLabel()
         self.approval_img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.approval_img_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.approval_img_label.setStyleSheet(self.image_frame_style("#7DDC8D"))
+        self.approval_img_label.setStyleSheet("background-color: black; border-top: 3px solid #4CAF50; border-bottom: 3px solid #4CAF50;")
+        self.apply_shadow(self.approval_img_label) # Apply shadow
         layout.addWidget(self.approval_img_label, stretch=1)
         
         btn_layout = QHBoxLayout()
-        btn_layout.setContentsMargins(0, 8, 0, 0)
+        btn_layout.setContentsMargins(20, 20, 20, 20)
         btn_layout.setSpacing(20)
         
         btn_retake = QPushButton("다시 촬영")
         btn_retake.setFixedHeight(100)
-        btn_retake.setStyleSheet(self.gradient_button_style("#5C677D", "#7D8597", font_size=34, radius=24))
-        self.apply_shadow(btn_retake)
+        btn_retake.setStyleSheet("""
+            QPushButton {
+                background-color: #757575; 
+                color: white; 
+                font-size: 35px; 
+                font-weight: bold; 
+                border-radius: 10px;
+            }
+            QPushButton:hover {
+                background-color: #616161;
+            }
+            QPushButton:pressed {
+                background-color: #424242;
+                padding-top: 5px;
+            }
+        """)
+        self.apply_shadow(btn_retake) # Apply shadow
         btn_retake.clicked.connect(self.retake_photo)
         
         btn_approve = QPushButton("이 사진 사용하기")
         btn_approve.setFixedHeight(100)
-        btn_approve.setStyleSheet(self.gradient_button_style("#56AB2F", "#A8E063", font_size=34, radius=24))
-        self.apply_shadow(btn_approve)
+        btn_approve.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50; 
+                color: white; 
+                font-size: 35px; 
+                font-weight: bold; 
+                border-radius: 10px;
+            }
+            QPushButton:hover {
+                background-color: #43A047;
+            }
+            QPushButton:pressed {
+                background-color: #388E3C;
+                padding-top: 5px;
+            }
+        """)
+        self.apply_shadow(btn_approve) # Apply shadow
         btn_approve.clicked.connect(self.go_to_pen_selection)
         
         btn_layout.addWidget(btn_retake)
         btn_layout.addWidget(btn_approve)
         layout.addLayout(btn_layout)
-
-        outer.addWidget(shell)
         
         return page
 
     def create_page_pen(self):
         page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(18, 18, 18, 18)
-
-        shell = self.create_glass_panel()
-        layout = QVBoxLayout(shell)
-        layout.setContentsMargins(40, 32, 40, 32)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(30)
 
         label = QLabel("사용할 펜을 선택해주세요")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet(self.title_style(42))
+        label.setStyleSheet("font-size: 40px; font-weight: bold; color: white; margin: 20px;")
         layout.addWidget(label)
 
         self.pen_selected_label = QLabel("")
         self.pen_selected_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.pen_selected_label.setStyleSheet(self.subtitle_style(22))
+        self.pen_selected_label.setStyleSheet("font-size: 24px; color: white;")
         layout.addWidget(self.pen_selected_label)
 
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(25)
-        gradients = [
-            ("#434343", "#000000"),
-            ("#1E3C72", "#2A5298"),
-            ("#F12711", "#F5AF19"),
-        ]
+        colors = ["#455A64", "#1976D2", "#E65100"]
+        hover_colors = ["#37474F", "#1565C0", "#EF6C00"]
+        pressed_colors = ["#263238", "#0D47A1", "#E65100"]
 
         for idx, pen_name in enumerate(config.PEN_PRESETS.keys()):
             btn = QPushButton(pen_name)
             btn.setFixedSize(280, 220)
-            start, end = gradients[idx % len(gradients)]
-            btn.setStyleSheet(self.card_button_style(start, end, font_size=34, radius=30))
-            self.apply_shadow(btn, blur=36, y_offset=12, alpha=65)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors[idx % len(colors)]}; 
+                    color: white; 
+                    font-size: 34px; 
+                    font-weight: bold; 
+                    border-radius: 20px;
+                }}
+                QPushButton:hover {{
+                    background-color: {hover_colors[idx % len(hover_colors)]};
+                }}
+                QPushButton:pressed {{
+                    background-color: {pressed_colors[idx % len(pressed_colors)]};
+                    padding-top: 5px;
+                }}
+            """)
+            self.apply_shadow(btn) # Apply shadow
             btn.clicked.connect(lambda checked, name=pen_name: self.select_pen(name))
             btn_layout.addWidget(btn)
 
@@ -476,45 +394,81 @@ class KioskUserGui(QMainWindow):
 
         btn_back = QPushButton("뒤로 가기")
         btn_back.setFixedSize(220, 70)
-        btn_back.setStyleSheet(self.neutral_button_style(font_size=24))
-        self.apply_shadow(btn_back, blur=22, y_offset=8, alpha=45)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #757575;
+                color: white;
+                font-size: 24px;
+                font-weight: bold;
+                border-radius: 10px;
+            }
+            QPushButton:hover {
+                background-color: #616161;
+            }
+            QPushButton:pressed {
+                background-color: #424242;
+                padding-top: 3px;
+            }
+        """)
+        self.apply_shadow(btn_back) # Apply shadow
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_approval))
         layout.addWidget(btn_back, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        outer.addWidget(shell)
         return page
 
     def create_page_mode(self):
         page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(18, 18, 18, 18)
-
-        shell = self.create_glass_panel()
-        layout = QVBoxLayout(shell)
-        layout.setContentsMargins(40, 32, 40, 32)
-        layout.setSpacing(30)
+        layout = QVBoxLayout(page)
         
         label = QLabel("모드를 선택해주세요")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet(self.title_style(42))
+        label.setStyleSheet("font-size: 40px; font-weight: bold; margin: 50px;")
         layout.addWidget(label)
         
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(34)
-        btn_portrait = QPushButton("초상화\n캐리커처")
+        btn_portrait = QPushButton("🎨 초상화\n(캐리커처)")
         btn_portrait.setFixedSize(400, 300)
-        btn_portrait.setStyleSheet(self.card_button_style("#4FACFE", "#00F2FE", font_size=40, radius=32))
-        self.apply_shadow(btn_portrait, blur=40, y_offset=14, alpha=70)
+        btn_portrait.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3; 
+                color: white; 
+                font-size: 40px; 
+                border-radius: 20px;
+            }
+            QPushButton:hover {
+                background-color: #1E88E5;
+            }
+            QPushButton:pressed {
+                background-color: #1976D2;
+                padding-top: 5px;
+            }
+        """)
+        self.apply_shadow(btn_portrait) # Apply shadow
         btn_portrait.clicked.connect(self.go_to_portrait_mode)
         
-        btn_char = QPushButton("캐릭터\n동반 모드")
+        btn_char = QPushButton("🐾 캐릭터\n동반 모드")
         btn_char.setFixedSize(400, 300)
-        btn_char.setStyleSheet(self.card_button_style("#FA709A", "#FEE140", font_size=40, radius=32))
-        self.apply_shadow(btn_char, blur=40, y_offset=14, alpha=70)
+        btn_char.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800; 
+                color: white; 
+                font-size: 40px; 
+                border-radius: 20px;
+            }
+            QPushButton:hover {
+                background-color: #FB8C00;
+            }
+            QPushButton:pressed {
+                background-color: #F57C00;
+                padding-top: 5px;
+            }
+        """)
+        self.apply_shadow(btn_char) # Apply shadow
         btn_char.clicked.connect(self.go_to_char_mode)
         
         btn_layout.addStretch()
         btn_layout.addWidget(btn_portrait)
+        btn_layout.addSpacing(50)
         btn_layout.addWidget(btn_char)
         btn_layout.addStretch()
         
@@ -523,77 +477,132 @@ class KioskUserGui(QMainWindow):
         
         btn_back = QPushButton("뒤로 가기")
         btn_back.setFixedSize(200, 60)
-        btn_back.setStyleSheet(self.neutral_button_style(font_size=22))
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #757575;
+                color: white;
+                font-size: 20px;
+                font-weight: bold;
+                border-radius: 10px;
+            }
+            QPushButton:hover {
+                background-color: #616161;
+            }
+            QPushButton:pressed {
+                background-color: #424242;
+                padding-top: 3px;
+            }
+        """)
+        self.apply_shadow(btn_back) # Apply shadow
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_pen))
         layout.addWidget(btn_back, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        outer.addWidget(shell)
         
         return page
 
     def create_page_portrait(self):
         page = QWidget()
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(24)
         
         # Left: Preview
         self.portrait_preview = QLabel()
         self.portrait_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.portrait_preview.setStyleSheet(self.image_frame_style("#93C5FD"))
-        self.portrait_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.apply_shadow(self.portrait_preview, blur=38, y_offset=12, alpha=60)
-        layout.addWidget(self.portrait_preview, stretch=2)
+        self.portrait_preview.setStyleSheet("border: 3px solid #ccc; background-color: #eee; border-radius: 10px;")
+        self.apply_shadow(self.portrait_preview) # Apply shadow
+        layout.addWidget(self.portrait_preview, stretch=1)
         
         # Right: Prompts
-        right_widget = self.create_glass_panel()
+        right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(28, 28, 28, 28)
-        right_layout.setSpacing(18)
         
         label = QLabel("스타일을 선택하세요")
-        label.setStyleSheet(self.title_style(30))
+        label.setStyleSheet("font-size: 30px; font-weight: bold; color: white;")
         right_layout.addWidget(label)
         
         self.portrait_btn_group = QWidget()
-        self.portrait_btn_group.setStyleSheet("background: transparent;")
         self.portrait_grid = QGridLayout(self.portrait_btn_group)
-        self.portrait_grid.setSpacing(16)
         
-        colors = [
-            ("#F857A6", "#FF5858"),
-            ("#11998E", "#38EF7D"),
-            ("#F7971E", "#FFD200"),
-            ("#654EA3", "#EAAFC8"),
-        ]
+        colors = ["#F44336", "#4CAF50", "#FFC107", "#9C27B0"]
+        hover_colors = ["#E53935", "#43A047", "#FFB300", "#8E24AA"]
         for i, (name, prompt) in enumerate(self.prompts_dict.items()):
             btn = QPushButton(name.split(".")[-1].strip())
-            # Removed fixed height and added expanding size policy to fill vertical space
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            start, end = colors[i % len(colors)]
-            btn.setStyleSheet(self.card_button_style(start, end, font_size=24, radius=22))
+            btn.setFixedSize(200, 100)
+            color = colors[i % len(colors)]
+            h_color = hover_colors[i % len(hover_colors)]
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color}; 
+                    color: white; 
+                    font-size: 18px; 
+                    font-weight: bold; 
+                    border-radius: 10px;
+                }}
+                QPushButton:hover {{
+                    background-color: {h_color};
+                }}
+                QPushButton:pressed {{
+                    padding-top: 3px;
+                }}
+            """)
+            self.apply_shadow(btn, blur_radius=10, alpha=60) # Smaller shadow for grid items
             btn.clicked.connect(lambda checked, p=prompt, n=name: self.select_portrait_prompt(p, n))
             self.portrait_grid.addWidget(btn, i // 2, i % 2)
             
         portrait_scroll = QScrollArea()
         portrait_scroll.setWidgetResizable(True)
         portrait_scroll.setWidget(self.portrait_btn_group)
-        right_layout.addWidget(portrait_scroll, stretch=1) # Give scroll area stretch priority
+        right_layout.addWidget(portrait_scroll)
+        right_layout.addStretch()
         
         self.btn_start_portrait = QPushButton("생성 시작")
         self.btn_start_portrait.setFixedHeight(80)
         self.btn_start_portrait.setEnabled(False)
-        self.btn_start_portrait.setStyleSheet(self.gradient_button_style("#4FACFE", "#00C6FF", font_size=25, radius=24))
-        self.apply_shadow(self.btn_start_portrait)
+        self.btn_start_portrait.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3; 
+                color: white; 
+                font-size: 25px; 
+                font-weight: bold; 
+                border-radius: 10px;
+            }
+            QPushButton:hover {
+                background-color: #1E88E5;
+            }
+            QPushButton:pressed {
+                background-color: #1976D2;
+                padding-top: 5px;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                color: #757575;
+            }
+        """)
+        self.apply_shadow(self.btn_start_portrait) # Apply shadow
         self.btn_start_portrait.clicked.connect(self.start_generation)
         right_layout.addWidget(self.btn_start_portrait)
         
         btn_back = QPushButton("이전으로")
-        btn_back.setStyleSheet(self.neutral_button_style(font_size=22))
+        btn_back.setFixedHeight(50)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #757575;
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 10px;
+            }
+            QPushButton:hover {
+                background-color: #616161;
+            }
+            QPushButton:pressed {
+                background-color: #424242;
+                padding-top: 3px;
+            }
+        """)
+        self.apply_shadow(btn_back) # Apply shadow
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
         right_layout.addWidget(btn_back)
         
-        layout.addWidget(right_widget, stretch=3)
+        layout.addWidget(right_widget, stretch=1)
         return page
 
     def create_page_char(self):
@@ -605,24 +614,23 @@ class KioskUserGui(QMainWindow):
         # Left: Preview
         self.char_preview = QLabel()
         self.char_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.char_preview.setStyleSheet(self.image_frame_style("#F9A826"))
-        self.char_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.apply_shadow(self.char_preview, blur=38, y_offset=12, alpha=60)
+        self.char_preview.setStyleSheet("border: 4px solid #F9A826; background-color: #1e1e1e; border-radius: 20px;")
+        self.apply_shadow(self.char_preview) # Apply shadow
         layout.addWidget(self.char_preview, stretch=2)
         
         # Right
-        right_widget = self.create_glass_panel()
+        right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(28, 28, 28, 28)
+        right_layout.setContentsMargins(10, 10, 10, 10)
         right_layout.setSpacing(18)
         
         # Characters
         label_char = QLabel("1. 캐릭터 선택")
-        label_char.setStyleSheet(self.title_style(26))
+        label_char.setStyleSheet("font-size: 28px; font-weight: bold; color: #333;")
         right_layout.addWidget(label_char)
         
         char_scroll = QScrollArea()
-        char_scroll.setFixedHeight(180) # Slightly increased height for image buttons
+        char_scroll.setFixedHeight(180)
         char_scroll.setWidgetResizable(True)
         char_container = QWidget()
         char_container.setStyleSheet("background: transparent;")
@@ -642,7 +650,20 @@ class KioskUserGui(QMainWindow):
                 btn.setIcon(QIcon(pixmap))
                 btn.setIconSize(QSize(120, 120))
             
-            btn.setStyleSheet(self.card_button_style("#355C7D", "#6C5B7B", font_size=0, radius=18)) # font_size=0 since we use icon
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #607D8B; 
+                    border-radius: 15px; 
+                    border: 2px solid #455A64;
+                }
+                QPushButton:hover {
+                    background-color: #546E7A;
+                }
+                QPushButton:pressed {
+                    background-color: #37474F;
+                }
+            """)
+            self.apply_shadow(btn, blur_radius=10, alpha=60)
             btn.clicked.connect(lambda checked, img=f: self.select_character(img))
             char_layout.addWidget(btn)
         char_scroll.setWidget(char_container)
@@ -650,31 +671,43 @@ class KioskUserGui(QMainWindow):
         
         # Prompts (Action styles)
         label_prompt = QLabel("2. 동반 스타일 선택")
-        label_prompt.setStyleSheet(self.title_style(26))
+        label_prompt.setStyleSheet("font-size: 28px; font-weight: bold; color: #333;")
         right_layout.addWidget(label_prompt)
         
         prompt_scroll = QScrollArea()
         prompt_scroll.setWidgetResizable(True)
         prompt_container = QWidget()
         prompt_container.setStyleSheet("background: transparent;")
-        # Changed to QGridLayout for 2-column layout
         prompt_grid = QGridLayout(prompt_container)
         prompt_grid.setSpacing(12)
         
-        colors = [
-            ("#8E9EAB", "#65799B"),
-            ("#7474BF", "#348AC7"),
-            ("#4CA1AF", "#2C3E50"),
-            ("#2BC0E4", "#EAECC6"),
-        ]
+        colors = ["#78909C", "#5C6BC0", "#26A69A", "#42A5F5"]
+        hover_colors = ["#607D8B", "#3F51B5", "#009688", "#2196F3"]
         
         for i, (name, prompt) in enumerate(self.char_prompts_dict.items()):
             btn = QPushButton(name)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            start, end = colors[i % len(colors)]
-            btn.setStyleSheet(self.gradient_button_style(start, end, font_size=20, radius=18, padding="10px"))
+            color = colors[i % len(colors)]
+            h_color = hover_colors[i % len(hover_colors)]
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color}; 
+                    color: white; 
+                    font-size: 20px; 
+                    font-weight: bold; 
+                    border-radius: 12px; 
+                    padding: 10px;
+                }}
+                QPushButton:hover {{
+                    background-color: {h_color};
+                }}
+                QPushButton:pressed {{
+                    padding-top: 3px;
+                }}
+            """)
+            self.apply_shadow(btn, blur_radius=10, alpha=60)
             btn.clicked.connect(lambda checked, p=prompt, n=name: self.select_char_prompt(p, n))
-            prompt_grid.addWidget(btn, i // 2, i % 2) # 2-column grid
+            prompt_grid.addWidget(btn, i // 2, i % 2)
             
         prompt_scroll.setWidget(prompt_container)
         right_layout.addWidget(prompt_scroll, stretch=1)
@@ -682,13 +715,49 @@ class KioskUserGui(QMainWindow):
         self.btn_start_char = QPushButton("생성 시작")
         self.btn_start_char.setFixedHeight(80)
         self.btn_start_char.setEnabled(False)
-        self.btn_start_char.setStyleSheet(self.gradient_button_style("#FA709A", "#FEE140", font_size=25, radius=24))
+        self.btn_start_char.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800; 
+                color: white; 
+                font-size: 28px; 
+                font-weight: bold; 
+                border-radius: 15px;
+            }
+            QPushButton:hover {
+                background-color: #FB8C00;
+            }
+            QPushButton:pressed {
+                background-color: #F57C00;
+                padding-top: 5px;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                color: #757575;
+            }
+        """)
         self.apply_shadow(self.btn_start_char)
         self.btn_start_char.clicked.connect(self.start_generation)
         right_layout.addWidget(self.btn_start_char)
         
         btn_back = QPushButton("이전으로")
-        btn_back.setStyleSheet(self.neutral_button_style(font_size=22))
+        btn_back.setFixedHeight(60)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #757575; 
+                color: white; 
+                font-size: 22px; 
+                font-weight: bold; 
+                border-radius: 12px;
+            }
+            QPushButton:hover {
+                background-color: #616161;
+            }
+            QPushButton:pressed {
+                background-color: #424242;
+                padding-top: 3px;
+            }
+        """)
+        self.apply_shadow(btn_back)
         btn_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_mode))
         right_layout.addWidget(btn_back)
         
@@ -698,65 +767,51 @@ class KioskUserGui(QMainWindow):
     def create_page_result(self):
         page = QWidget()
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(24)
         
         # Left: Original
-        left_widget = self.create_glass_panel()
+        left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(24, 24, 24, 24)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         left_title = QLabel("원본 사진")
         left_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        left_title.setStyleSheet(self.title_style(24))
+        left_title.setStyleSheet("font-size: 22px; font-weight: bold; color: white;")
         left_layout.addWidget(left_title)
         self.result_orig_label = QLabel()
         self.result_orig_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.result_orig_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.result_orig_label.setMinimumSize(400, 500)
-        self.result_orig_label.setStyleSheet(self.image_frame_style("#8BE28B"))
+        self.result_orig_label.setStyleSheet("border: 5px solid #4CAF50; background-color: #1e1e1e; border-radius: 10px;")
+        self.apply_shadow(self.result_orig_label)
         left_layout.addWidget(self.result_orig_label, stretch=1)
         layout.addWidget(left_widget, stretch=1)
         
         self.result_arrow_label = QLabel("→")
         self.result_arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.result_arrow_label.setFixedWidth(80)
-        self.result_arrow_label.setStyleSheet("font-size: 64px; font-weight: 900; color: #42526E;")
+        self.result_arrow_label.setStyleSheet("font-size: 64px; font-weight: bold; color: white;")
         layout.addWidget(self.result_arrow_label)
         
         # Right: Result
-        right_widget = self.create_glass_panel()
+        right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(24, 24, 24, 24)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         self.result_title = QLabel("AI가 그림을 그리고 있습니다...")
         self.result_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.result_title.setStyleSheet(self.title_style(26))
+        self.result_title.setStyleSheet("font-size: 25px; font-weight: bold; color: white;")
         right_layout.addWidget(self.result_title)
         
         self.result_img_label = QLabel()
         self.result_img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.result_img_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.result_img_label.setMinimumSize(400, 500)
-        self.result_img_label.setStyleSheet(self.image_frame_style("#7AB8FF"))
+        self.result_img_label.setStyleSheet("border: 5px solid #2196F3; background-color: #1e1e1e; border-radius: 10px;")
+        self.apply_shadow(self.result_img_label)
         right_layout.addWidget(self.result_img_label, stretch=1)
         
         self.result_progress = QProgressBar()
         self.result_progress.setFixedHeight(30)
-        self.result_progress.setStyleSheet("""
-            QProgressBar {
-                border: none;
-                border-radius: 15px;
-                background-color: rgba(255, 255, 255, 0.5);
-                text-align: center;
-                color: #14213D;
-                font-size: 15px;
-                font-weight: 700;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #667EEA, stop:1 #764BA2);
-                border-radius: 15px;
-            }
-        """)
         right_layout.addWidget(self.result_progress)
         
         layout.addWidget(right_widget, stretch=1)
@@ -1160,6 +1215,23 @@ class KioskUserGui(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # Register custom font (BM JUA)
+    font_path = os.path.join(os.path.dirname(__file__), "BMJUA_ttf.ttf")
+    font_family = "sans-serif" # Fallback
+    if os.path.exists(font_path):
+        font_id = QFontDatabase.addApplicationFont(font_path)
+        if font_id != -1:
+            font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+    
+    # Apply modern Material Design theme
+    apply_stylesheet(app, theme='dark_teal.xml')
+    
+    # FORCE font after stylesheet application
+    app.setFont(QFont(font_family))
+    # Additionally set global stylesheet to ensure everything uses the font
+    app.setStyleSheet(app.styleSheet() + f"\n* {{ font-family: '{font_family}'; }}")
+    
     gui = KioskUserGui()
     gui.show()
     sys.exit(app.exec())

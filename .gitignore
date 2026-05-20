@@ -10,3 +10,4 @@ Test/
 data/*
 !data/.gitkeep
 *.cpython-311
+.env

@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 import shutil
+from dotenv import load_dotenv
 from modules import (
     config,
     image_processor,
@@ -11,6 +12,9 @@ from modules import (
     generate_sketch,
     generate_gemini_sketch
 )
+
+# .env 파일 로드
+load_dotenv()
 
 class SketchProcessor:
     def __init__(self):

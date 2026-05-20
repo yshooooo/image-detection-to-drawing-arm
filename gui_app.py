@@ -4,10 +4,14 @@ import re
 import subprocess
 import cv2
 import numpy as np
+from dotenv import load_dotenv
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QGridLayout, QLabel, QComboBox, QPushButton, 
                              QGroupBox, QFileDialog, QMessageBox, QScrollArea,
                              QLineEdit, QProgressBar, QSlider)
+
+# .env 파일 로드
+load_dotenv()
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 
@@ -318,8 +322,8 @@ class SketchGui(QMainWindow):
         right_layout.addWidget(QLabel("Gemini API Key:"))
         self.edit_api_key = QLineEdit()
         self.edit_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.edit_api_key.setText("AIzaSyAAepYJsbdwtrVseJe3pqf0hKfvRz_yk1w") # 여기에 실제 API 키 입력
-        self.edit_api_key.setPlaceholderText("API 키가 하드코딩됨")
+        self.edit_api_key.setText(os.getenv("GEMINI_API_KEY", "")) # .env 파일이나 환경변수에서 로드
+        self.edit_api_key.setPlaceholderText("API 키가 설정되지 않음")
         right_layout.addWidget(self.edit_api_key)
 
         # Temperature (일관성/창의성) 조절
