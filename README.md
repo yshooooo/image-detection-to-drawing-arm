@@ -8,7 +8,7 @@
 * **주요 기능**: 카메라 촬영 -> 인물 인식 및 크롭 -> AI 스케치 변환 -> 세선화(thinning) 및 G-code 변환 -> 로봇 드로잉
 * **사용 장비**: 두산로보틱스 협동로봇(A0509), 엔드이펙터/그리퍼(JEGH-3520P)
 * **개발 환경**: Ubuntu 22.04 LTS, ROS2 Humble
-* **주요 기술 스택**: Python, PyQt6, OpenCV, MediaPipe, Google Gemini API, ROS2, DSR_ROBOT2 Python API
+* **주요 기술 스택**: Python, PyQt6, OpenCV, MediaPipe, Google Gemini API, ROS2, Doosan Robotics 패키지
 * **기간**: 2025.09.02 ~ 2026.06.15 (원본 팀 프로젝트 기준, 이후 개인 확장 작업 진행)
 
 ## 갤러리
